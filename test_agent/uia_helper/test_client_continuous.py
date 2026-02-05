@@ -1,0 +1,309 @@
+"""
+UIA Helper 持续监控测试客户端
+用于测试在Popup失去焦点就消失的情况下持续捕获
+"""
+
+import requests
+import json
+import time
+import threading
+from typing import Dict, Any, Optional
+from datetime import datetime
+
+
+class ContinuousUIAClient:
+    """持续监控的UIA Helper客户端"""
+    
+    def __init__(self, base_url: str = "http://localhost:3333"):
+        self.base_url = base_url
+        self.monitoring = False
+        self.popup_detected = False
+        self.last_popup_state = None
+        self.monitor_thread = None
+    
+    def get_popup_state(self) -> Dict[str, Any]:
+        """获取Popup状态"""
+        try:
+            response = requests.get(f"{self.base_url}/uia/get_popup_state", timeout=2)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def select_and_confirm(self, profile_index: int = 0, payment_index: int = 0) -> Dict[str, Any]:
+        """选择地址/支付方式并确认"""
+        try:
+            data = {
+                'profile_index': profile_index,
+                'payment_index': payment_index
+            }
+            response = requests.post(
+                f"{self.base_url}/uia/select_and_confirm",
+                json=data,
+                timeout=10
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+    
+    def _monitor_popup(self, check_interval: float = 0.5, timeout: float = 30):
+        """
+        持续监控Popup的出现
+        
+        Args:
+            check_interval: 检查间隔（秒）
+            timeout: 总超时时间（秒）
+        """
+        start_time = time.time()
+        check_count = 0
+        
+        print(f"\n🔍 开始监控 Popup（每 {check_interval} 秒检查一次）...")
+        print(f"⏱️  最长监控 {timeout} 秒")
+        print("-" * 60)
+        
+        while self.monitoring and (time.time() - start_time) < timeout:
+            check_count += 1
+            elapsed = time.time() - start_time
+            
+            # 获取状态
+            state = self.get_popup_state()
+            
+            if state.get('success') and state.get('visible'):
+                # 检测到Popup
+                if not self.popup_detected:
+                    self.popup_detected = True
+                    print(f"\n✅ [检查 #{check_count}] 检测到 Popup! (耗时: {elapsed:.1f}秒)")
+                    print(f"   选项数量: {state.get('item_count')}")
+                    
+                    items = state.get('items', [])
+                    if items:
+                        print("   可用选项:")
+                        for i, item in enumerate(items):
+                            print(f"      {i}. {item}")
+                
+                # 更新最后的状态
+                self.last_popup_state = state
+                
+                # 显示持续检测到
+                print(f"   [{datetime.now().strftime('%H:%M:%S')}] Popup 仍然可见", end='\r')
+            else:
+                # 未检测到Popup
+                if self.popup_detected:
+                    # 之前检测到了，现在消失了
+                    print(f"\n⚠️  [检查 #{check_count}] Popup 已消失")
+                    self.popup_detected = False
+                else:
+                    # 一直没检测到
+                    print(f"   [{datetime.now().strftime('%H:%M:%S')}] 等待 Popup 出现... (已等待 {elapsed:.1f}秒)", end='\r')
+            
+            time.sleep(check_interval)
+        
+        if (time.time() - start_time) >= timeout:
+            print(f"\n\n⏱️  监控超时（{timeout}秒）")
+        
+        print(f"\n监控结束，共检查 {check_count} 次")
+        print("-" * 60)
+    
+    def start_monitoring(self, check_interval: float = 0.5, timeout: float = 30):
+        """
+        启动持续监控
+        
+        Args:
+            check_interval: 检查间隔（秒），默认0.5秒
+            timeout: 总超时时间（秒），默认30秒
+        """
+        if self.monitoring:
+            print("⚠️  监控已在运行中")
+            return
+        
+        self.monitoring = True
+        self.popup_detected = False
+        self.last_popup_state = None
+        
+        # 在新线程中运行监控
+        self.monitor_thread = threading.Thread(
+            target=self._monitor_popup,
+            args=(check_interval, timeout)
+        )
+        self.monitor_thread.daemon = True
+        self.monitor_thread.start()
+    
+    def stop_monitoring(self):
+        """停止监控"""
+        if not self.monitoring:
+            print("⚠️  监控未运行")
+            return
+        
+        print("\n🛑 停止监控...")
+        self.monitoring = False
+        
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=5)
+    
+    def wait_for_popup(self, timeout: float = 30, check_interval: float = 0.5) -> Optional[Dict[str, Any]]:
+        """
+        等待Popup出现并返回状态
+        
+        Args:
+            timeout: 超时时间（秒）
+            check_interval: 检查间隔（秒）
+        
+        Returns:
+            Popup状态字典，如果超时则返回None
+        """
+        start_time = time.time()
+        
+        print(f"\n⏳ 等待 Popup 出现（最多 {timeout} 秒）...")
+        
+        while (time.time() - start_time) < timeout:
+            state = self.get_popup_state()
+            
+            if state.get('success') and state.get('visible'):
+                elapsed = time.time() - start_time
+                print(f"✅ 在 {elapsed:.1f} 秒后检测到 Popup")
+                return state
+            
+            time.sleep(check_interval)
+        
+        print(f"❌ 超时：未在 {timeout} 秒内检测到 Popup")
+        return None
+
+
+def test_continuous_monitoring():
+    """测试持续监控功能"""
+    print("=" * 60)
+    print("UIA Helper 持续监控测试")
+    print("=" * 60)
+    
+    client = ContinuousUIAClient()
+    
+    # 检查服务器连接
+    print("\n检查服务器连接...")
+    try:
+        response = requests.get(f"{client.base_url}/uia/get_popup_state", timeout=2)
+        print("✅ 服务器在线")
+    except Exception as e:
+        print(f"❌ 服务器离线: {e}")
+        print("\n请先启动服务器: python uia_server.py")
+        return
+    
+    print("\n" + "=" * 60)
+    print("测试场景：持续监控 Popup（适合失去焦点就消失的情况）")
+    print("=" * 60)
+    
+    print("\n⏳ 请在接下来的30秒内:")
+    print("  1. 打开 Edge 浏览器")
+    print("  2. 访问有 Express Checkout 的页面")
+    print("  3. 点击 Express Checkout 按钮")
+    print("  4. 让 Popup 显示（不要让它失去焦点）")
+    
+    input("\n按 Enter 开始监控...")
+    
+    # 启动持续监控（30秒，每0.3秒检查一次）
+    client.start_monitoring(check_interval=0.3, timeout=30)
+    
+    # 等待监控完成
+    if client.monitor_thread:
+        client.monitor_thread.join()
+    
+    # 如果检测到了Popup，尝试操作
+    if client.popup_detected and client.last_popup_state:
+        print("\n" + "=" * 60)
+        print("检测到 Popup，准备执行操作...")
+        print("=" * 60)
+        
+        choice = input("\n是否要选择第一个选项并确认？(y/n): ").strip().lower()
+        
+        if choice == 'y':
+            print("\n执行操作...")
+            # 快速获取最新状态并操作
+            state = client.get_popup_state()
+            if state.get('visible'):
+                result = client.select_and_confirm(profile_index=0)
+                if result.get('success'):
+                    print("✅ 操作成功")
+                else:
+                    print(f"❌ 操作失败: {result.get('error')}")
+            else:
+                print("❌ Popup 已消失，无法操作")
+    else:
+        print("\n❌ 未检测到 Popup")
+
+
+def test_wait_and_act():
+    """测试等待并立即操作"""
+    print("=" * 60)
+    print("UIA Helper 等待并立即操作测试")
+    print("=" * 60)
+    
+    client = ContinuousUIAClient()
+    
+    # 检查服务器
+    print("\n检查服务器连接...")
+    try:
+        requests.get(f"{client.base_url}/uia/get_popup_state", timeout=2)
+        print("✅ 服务器在线")
+    except Exception as e:
+        print(f"❌ 服务器离线: {e}")
+        return
+    
+    print("\n" + "=" * 60)
+    print("测试场景：等待 Popup 出现后立即操作")
+    print("=" * 60)
+    
+    print("\n⏳ 请准备:")
+    print("  1. 确保 Edge 浏览器已打开")
+    print("  2. 访问有 Express Checkout 的页面")
+    
+    input("\n准备好后按 Enter，然后立即点击 Express Checkout 按钮...")
+    
+    # 等待 Popup 出现（检查频率更高，反应更快）
+    state = client.wait_for_popup(timeout=15, check_interval=0.2)
+    
+    if state:
+        print(f"\n检测到 Popup，包含 {state.get('item_count')} 个选项")
+        
+        # 立即执行操作（在Popup消失前）
+        print("\n⚡ 立即执行操作...")
+        result = client.select_and_confirm(profile_index=0)
+        
+        if result.get('success'):
+            print("✅ 操作成功")
+            if result.get('warning'):
+                print(f"⚠️  {result.get('warning')}")
+        else:
+            print(f"❌ 操作失败: {result.get('error')}")
+    else:
+        print("\n❌ 未能在规定时间内检测到 Popup")
+
+
+def main():
+    """主函数"""
+    while True:
+        print("\n" + "=" * 60)
+        print("UIA Helper 持续监控测试工具")
+        print("=" * 60)
+        print("\n选择测试模式:")
+        print("  1. 持续监控模式（适合观察Popup行为）")
+        print("  2. 等待并立即操作模式（适合实际测试）")
+        print("  0. 退出")
+        print("=" * 60)
+        
+        choice = input("\n请选择 (0-2): ").strip()
+        
+        if choice == '0':
+            print("\n退出程序")
+            break
+        elif choice == '1':
+            test_continuous_monitoring()
+        elif choice == '2':
+            test_wait_and_act()
+        else:
+            print("❌ 无效选项")
+        
+        input("\n按 Enter 继续...")
+
+
+if __name__ == '__main__':
+    main()

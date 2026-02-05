@@ -1,0 +1,63 @@
+[project]
+name = "test-agent"
+description = "Browser automation testing framework using browser-use"
+authors = [{ name = "Test Agent Team" }]
+version = "0.2.0"
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # Core dependencies
+    "httpx>=0.28.1",
+    "pydantic>=2.11.5",
+    "python-dotenv>=1.0.1",
+    "requests>=2.32.3",
+    
+    # Browser automation - UPGRADED to v0.11.8
+    "browser-use>=0.11.8",
+    
+    # Azure integration (保留原有的 Azure 依赖)
+    "azure-devops>=7.1.0b4",
+    "msrest>=0.7.1",
+    "azure-identity>=1.21.0",
+    
+    # Utilities
+    "beautifulsoup4>=4.13.3",
+    "html5lib>=1.1",
+    "aiohttp>=3.13.3",
+    "lxml>=5.3.1",
+    
+    # API server (如果使用 API 功能)
+    "fastapi>=0.115.11",
+    "sqlalchemy>=2.0.39",
+    "aiosqlite>=0.21.0",
+    "click>=8.1.7",
+    "uvicorn>=0.34.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "ruff>=0.11.2",
+]
+
+[tool.ruff]
+line-length = 130
+fix = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "tab"
+docstring-code-format = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
