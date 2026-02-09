@@ -123,12 +123,12 @@ class UIAHelper:
                     matched_features.append(feature)
                     print(f"  ✓ Found feature: '{feature}'")
             
-            # 判断：宽度匹配 + 至少2个特征字符串
-            if len(matched_features) >= 2:
+            # 判断：宽度匹配 + 至少3个特征字符串
+            if len(matched_features) >= 3:
                 print(f"  ✅ Found Express Checkout Popup! (matched {len(matched_features)} features)")
                 return True
             
-            print(f"  ✗ Not enough features matched ({len(matched_features)}/2 required)")
+            print(f"  ✗ Not enough features matched ({len(matched_features)}/3 required)")
             return False
             
         except Exception as e:
@@ -426,8 +426,11 @@ class UIARequestHandler(BaseHTTPRequestHandler):
             profile_index = request_data.get('profile_index', 0)
             payment_index = request_data.get('payment_index', 0)
             
+            print(f"\n[HTTP] /uia/select_and_confirm - Request: profile_index={profile_index}, payment_index={payment_index}")
             result = self.uia_helper.select_and_confirm(profile_index, payment_index)
+            print(f"[HTTP] /uia/select_and_confirm - Response: {result}")
             self.send_json_response(result)
+            print(f"[HTTP] /uia/select_and_confirm - Response sent\n")
         else:
             self.send_error(404, "Not Found")
     

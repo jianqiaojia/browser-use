@@ -1,0 +1,56 @@
+{
+    "domain": "Nike Checkout",
+    "test_cases": [
+        {
+            "test_case_name": "Nike checkout page autofill (Guest)",
+            "test_case_description": "Navigate to Nike checkout page as guest, trigger autofill popup, and click autofill button via UIA automation. Preconditions: Edge browser has at least one saved address, UIA Helper server is running on localhost:3333",
+            "filter": {
+                "site_type": "inline topsite",
+                "priority": 1,
+                "feature": "checkout"
+            },
+            "steps": [
+                {
+                    "step_name": "Navigate to Nike homepage",
+                    "step_description": "Go to https://www.nike.com/us/",
+                    "expected_result": "Nike homepage should load successfully"
+                },
+                {
+                    "step_name": "Initialize log file monitor",
+                    "step_description": "Initialize log file monitor to track autofill status changes from Edge logs",
+                    "expected_result": "Log monitor should be initialized successfully"
+                },
+                {
+                    "step_name": "Add product to cart",
+                    "step_description": "Find a product that is AVAILABLE for purchase. IMPORTANT: Do NOT select products with labels 'Coming Soon', 'Not Available', 'Out of Stock', or 'Sold Out'. Select a size if needed, and add the available product to the shopping cart.",
+                    "expected_result": "An available product should be added to cart successfully"
+                },
+                {
+                    "step_name": "Proceed to checkout as guest",
+                    "step_description": "Navigate to the checkout page at https://www.nike.com/checkout as a GUEST user. IMPORTANT: Do NOT click 'Sign In', 'Join Us', or any login/membership buttons. You must proceed as a guest without logging in.",
+                    "expected_result": "Should reach checkout page at https://www.nike.com/checkout without signing in"
+                },
+                {
+                    "step_name": "Trigger autofill popup",
+                    "step_description": "Click on the email input field multiple times to trigger the autofill popup. Use this action sequence in ONE step: click email field, wait 1 second, click email field again, wait 1 second, click email field a third time, then immediately call uia_wait_for_popup (timeout: 5 seconds). IMPORTANT: Multiple clicks are needed because the popup may not appear on the first click - the page's JavaScript needs time to initialize. If popup is still not detected, retry the entire sequence.",
+                    "expected_result": "Edge's Express Checkout autofill popup should appear and be detected by UIA (popup should contain saved addresses, not footer/page elements)"
+                },
+                {
+                    "step_name": "Click autofill button via UIA",
+                    "step_description": "Use uia_select_autofill action to click the first autofill option in the detected popup. This should trigger the autofill process to fill all form fields.",
+                    "expected_result": "UIA should successfully click the autofill button, and form fields (email, firstName, lastName, address, etc.) should be automatically filled"
+                },
+                {
+                    "step_name": "Wait for autofill completion via log monitor",
+                    "step_description": "Use log monitor to wait for checkout state 'AutofillSucceeded' from the Edge log file with a timeout of 30 seconds. This confirms that autofill has completed successfully",
+                    "expected_result": "Log file monitor should detect state 'AutofillSucceeded' indicating the autofill operation completed successfully"
+                }
+            ],
+            "replay_steps": [],
+            "enable_features": "--enable-features=msEdgeSettingsWalletWebui2",
+            "disable_features": null,
+            "prerun_calls": null,
+            "postrun_calls": null
+        }
+    ]
+}
