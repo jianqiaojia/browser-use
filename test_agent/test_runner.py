@@ -129,7 +129,7 @@ async def run_test_case(
         
         # 运行测试
         print("▶️  Executing test...")
-        history = await agent.run(max_steps=20)
+        history = await agent.run(max_steps=config.max_steps)
         
         # 保存 history（自动的，方便调试和回归测试）
         safe_name = test.test_case_name.replace(" ", "_").replace("-", "_").lower()
@@ -154,11 +154,11 @@ async def run_test_case(
             if history.errors():
                 print("  Errors:")
                 for error in history.errors():
-                    if error:
+                    if error:       
                         print(f"    - {error}")
         
-        return success
-                
+        return success if success is not None else False
+    
     except Exception as e:
         print(f"\n❌ Error running test: {str(e)}")
         import traceback
