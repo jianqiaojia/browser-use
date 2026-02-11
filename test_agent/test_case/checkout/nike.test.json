@@ -3,7 +3,7 @@
     "test_cases": [
         {
             "test_case_name": "Nike checkout page autofill (Guest)",
-            "test_case_description": "Navigate to Nike checkout page as guest, trigger autofill popup, and click autofill button via UIA automation. Preconditions: Edge browser has at least one saved address, UIA Helper server is running on localhost:3333",
+            "test_case_description": "Navigate to Nike checkout page as guest, trigger autofill popup, and click autofill button. Preconditions: Edge browser has at least one saved address",
             "filter": {
                 "site_type": "inline topsite",
                 "priority": 1,
@@ -11,29 +11,24 @@
             },
             "steps": [
                 {
-                    "step_name": "Navigate to Nike homepage",
-                    "step_description": "Go to https://www.nike.com/us/",
-                    "expected_result": "Nike homepage should load successfully"
+                    "step_name": "Navigate to checkout page",
+                    "step_description": "Navigate directly to https://www.nike.com/checkout to check if there are already items in the cart ready for checkout",
+                    "expected_result": "Should reach checkout page at https://www.nike.com/checkout"
+                },
+                {
+                    "step_name": "Check if cart has items and proceed",
+                    "step_description": "Check if the checkout page shows any items in the cart. Scenarios: (1) If cart has VALID items ready for checkout (showing checkout form with email input field and no errors about unavailable items), initialize log monitor and proceed to step 'Trigger autofill popup'. (2) If cart is empty OR contains INVALID items (showing error messages like 'Out of Stock', 'Not Available', 'Sold Out', or redirect to empty cart page), navigate to Nike homepage https://www.nike.com/us/, find a product that is AVAILABLE (NOT showing 'Coming Soon', 'Not Available', 'Out of Stock', or 'Sold Out'), add it to cart, then return to https://www.nike.com/checkout as guest.",
+                    "expected_result": "Either proceed with existing valid cart items OR clear invalid items, add new valid items, and return to checkout page"
                 },
                 {
                     "step_name": "Initialize log file monitor",
-                    "step_description": "Initialize log file monitor to track autofill status changes from Edge logs",
+                    "step_description": "Initialize log file monitor to track autofill status changes from Edge logs. ONLY do this if you haven't initialized it yet in previous steps.",
                     "expected_result": "Log monitor should be initialized successfully"
                 },
                 {
-                    "step_name": "Add product to cart",
-                    "step_description": "Find a product that is AVAILABLE for purchase. IMPORTANT: Do NOT select products with labels 'Coming Soon', 'Not Available', 'Out of Stock', or 'Sold Out'. Select a size if needed, and add the available product to the shopping cart.",
-                    "expected_result": "An available product should be added to cart successfully"
-                },
-                {
-                    "step_name": "Proceed to checkout as guest",
-                    "step_description": "Navigate to the checkout page at https://www.nike.com/checkout as a GUEST user. IMPORTANT: Do NOT click 'Sign In', 'Join Us', or any login/membership buttons. You must proceed as a guest without logging in.",
-                    "expected_result": "Should reach checkout page at https://www.nike.com/checkout without signing in"
-                },
-                {
                     "step_name": "Trigger autofill popup",
-                    "step_description": "Click on the email input field multiple times to trigger the autofill popup. Use this action sequence in ONE step: click email field, wait 1 second, click email field again, wait 1 second, click email field a third time, then immediately call uia_wait_for_popup (timeout: 5 seconds). IMPORTANT: Multiple clicks are needed because the popup may not appear on the first click - the page's JavaScript needs time to initialize. If popup is still not detected, retry the entire sequence.",
-                    "expected_result": "Edge's Express Checkout autofill popup should appear and be detected by UIA (popup should contain saved addresses, not footer/page elements)"
+                    "step_description": "Clear the email input field by typing empty string with clear=true to remove any cached/prefilled values, then wait 0.5 seconds. After clearing, click the email input field three times with 1 second wait between each click (click, wait 1s, click, wait 1s, click), then wait 2 seconds and call uia_wait_for_popup (timeout: 5 seconds) to detect the popup. If popup detection fails (returns error or 0 options), use uia_click as backup: perform uia_click on the email field, wait 2 seconds, then call uia_wait_for_popup again (timeout: 5 seconds). Multiple clicks are needed because the popup may not appear on the first click.",
+                    "expected_result": "Email field should be cleared, ordinary clicks (3 times) should trigger the autofill popup. If ordinary clicks fail, uia_click backup should trigger the popup. Edge's Express Checkout autofill popup should appear and be detected by UIA (popup should contain saved addresses, not footer/page elements)"
                 },
                 {
                     "step_name": "Click autofill button via UIA",

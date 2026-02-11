@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from test_agent.view import SetSessionStorageAction
 from test_agent.config import config
+from test_agent.custom_actions.uia_click import register_uia_click
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -40,12 +41,15 @@ class LogMonitorWaitForStateModel(BaseModel):
 
 def register_custom_actions(tools: Tools):
     """Register custom actions for test automation.
-    
+
     MIGRATED to browser-use v0.11.8:
     - Controller → Tools
     - browser: BrowserContext → browser_session: BrowserSession
     - 使用新版的 Agent API
     """
+
+    # Register uia_click for real OS-level mouse clicks
+    register_uia_click(tools.registry)
 
     async def call_agent(
         task: str,

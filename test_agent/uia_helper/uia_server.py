@@ -8,6 +8,9 @@ import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any
 import comtypes.client
+import ctypes
+import win32api
+import win32con
 
 # 动态加载 UI Automation 类型库
 def _get_uia_client():
@@ -368,7 +371,7 @@ class UIAHelper:
     def get_popup_state(self) -> Dict[str, Any]:
         """
         获取 Popup 状态（用于 AI 分析）
-        
+
         Returns:
             包含Popup状态的字典
         """
@@ -376,25 +379,200 @@ class UIAHelper:
             popup = self.get_popup_element()
             if popup is None:
                 return {'success': False, 'visible': False}
-            
+
             # 获取列表项
             items = self.find_list_items(popup)
             addresses = []
-            
+
             for item in items:
                 try:
                     name = item.CurrentName
                     addresses.append(name)
                 except:
                     addresses.append("(无法读取)")
-            
+
             return {
                 'success': True,
                 'visible': True,
                 'item_count': len(items),
                 'items': addresses
             }
-            
+
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def click_at_position(self, x: int, y: int) -> Dict[str, Any]:
+        """
+        在指定屏幕坐标执行真实的鼠标点击
+
+        使用 Windows API 执行 OS 级别的鼠标点击，完全模拟真实用户操作
+
+        Args:
+            x: 屏幕 X 坐标
+            y: 屏幕 Y 坐标
+
+        Returns:
+            操作结果字典
+        """
+        try:
+            # 保存当前鼠标位置
+            current_pos = win32api.GetCursorPos()
+
+            # 移动鼠标到目标位置
+            win32api.SetCursorPos((x, y))
+            time.sleep(0.05)  # 短暂延迟，让系统处理鼠标移动
+
+            # 执行鼠标左键按下
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
+            time.sleep(0.05)
+
+            # 执行鼠标左键释放
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
+            time.sleep(0.05)
+
+            # 可选：恢复鼠标位置
+            # win32api.SetCursorPos(current_pos)
+
+            return {
+                'success': True,
+                'message': f'Clicked at screen position ({x}, {y})'
+            }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'error': f'Failed to click at position ({x}, {y}): {str(e)}'
+            }
+
+    def find_element_by_automation_id(self, automation_id: str) -> Dict[str, Any]:
+        """
+        通过 AutomationId 查找元素并返回其屏幕坐标
+
+        Args:
+            automation_id: 元素的 AutomationId (例如: "email")
+
+        Returns:
+            包含元素屏幕坐标的字典
+        """
+        try:
+            print(f"\n{'='*60}")
+            print(f"Searching for element with AutomationId: {automation_id}")
+            print(f"{'='*60}")
+
+            # 查找所有Chrome浏览器窗口
+            class_condition = self.uia.CreatePropertyCondition(
+                UIAutomationClient.UIA_ClassNamePropertyId,
+                "Chrome_WidgetWin_1"
+            )
+            windows = self.root.FindAll(
+                UIAutomationClient.TreeScope_Children,
+                class_condition
+            )
+
+            print(f"Found {windows.Length} Chrome windows")
+
+            # 在每个Chrome窗口内搜索元素
+            for i in range(windows.Length):
+                window = windows.GetElement(i)
+
+                try:
+                    name = window.CurrentName
+                    # 只在Edge浏览器窗口中搜索
+                    if 'edge' not in name.lower() and 'microsoft' not in name.lower():
+                        continue
+
+                    print(f"\nSearching in browser: {name}")
+
+                    # 搜索具有指定 AutomationId 的元素
+                    automation_id_condition = self.uia.CreatePropertyCondition(
+                        UIAutomationClient.UIA_AutomationIdPropertyId,
+                        automation_id
+                    )
+
+                    element = window.FindFirst(
+                        UIAutomationClient.TreeScope_Descendants,
+                        automation_id_condition
+                    )
+
+                    if element:
+                        try:
+                            rect = element.CurrentBoundingRectangle
+                            x = rect.left
+                            y = rect.top
+                            width = rect.right - rect.left
+                            height = rect.bottom - rect.top
+                            center_x = x + width // 2
+                            center_y = y + height // 2
+
+                            print(f"✅ Found element!")
+                            print(f"  Position: ({x}, {y})")
+                            print(f"  Size: {width}x{height}")
+                            print(f"  Center: ({center_x}, {center_y})")
+
+                            return {
+                                'success': True,
+                                'bounds': {
+                                    'x': x,
+                                    'y': y,
+                                    'width': width,
+                                    'height': height,
+                                    'center_x': center_x,
+                                    'center_y': center_y
+                                },
+                                'name': element.CurrentName
+                            }
+                        except Exception as e:
+                            print(f"Error getting element bounds: {e}")
+                            continue
+
+                except Exception as e:
+                    print(f"  Error searching in window: {e}")
+                    continue
+
+            print(f"\n❌ Element with AutomationId '{automation_id}' not found")
+            return {'success': False, 'error': f'Element with AutomationId {automation_id} not found'}
+
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
+    def click_element_by_automation_id(self, automation_id: str) -> Dict[str, Any]:
+        """
+        通过 AutomationId 查找元素并直接点击其中心位置
+
+        这个方法组合了查找和点击，避免了手动计算坐标的问题。
+        UIA 的 CurrentBoundingRectangle 直接返回屏幕坐标，非常可靠。
+
+        Args:
+            automation_id: 元素的 AutomationId (例如: "email")
+
+        Returns:
+            操作结果字典
+        """
+        try:
+            # 先查找元素
+            find_result = self.find_element_by_automation_id(automation_id)
+
+            if not find_result.get('success'):
+                return find_result
+
+            # 获取元素中心坐标
+            bounds = find_result['bounds']
+            center_x = bounds['center_x']
+            center_y = bounds['center_y']
+
+            # 点击中心位置
+            print(f"\n🖱️  Clicking element at center: ({center_x}, {center_y})")
+            click_result = self.click_at_position(center_x, center_y)
+
+            if click_result.get('success'):
+                return {
+                    'success': True,
+                    'message': f"Clicked element '{automation_id}' at ({center_x}, {center_y})",
+                    'bounds': bounds
+                }
+            else:
+                return click_result
+
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -417,20 +595,55 @@ class UIARequestHandler(BaseHTTPRequestHandler):
         if self.path == '/uia/find_popup':
             result = self.uia_helper.find_autofill_popup()
             self.send_json_response(result)
-            
+
         elif self.path == '/uia/select_and_confirm':
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             request_data = json.loads(post_data.decode('utf-8'))
-            
+
             profile_index = request_data.get('profile_index', 0)
             payment_index = request_data.get('payment_index', 0)
-            
+
             print(f"\n[HTTP] /uia/select_and_confirm - Request: profile_index={profile_index}, payment_index={payment_index}")
             result = self.uia_helper.select_and_confirm(profile_index, payment_index)
             print(f"[HTTP] /uia/select_and_confirm - Response: {result}")
             self.send_json_response(result)
             print(f"[HTTP] /uia/select_and_confirm - Response sent\n")
+
+        elif self.path == '/uia/click_at_position':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            request_data = json.loads(post_data.decode('utf-8'))
+
+            x = request_data.get('x')
+            y = request_data.get('y')
+
+            if x is None or y is None:
+                self.send_json_response({'success': False, 'error': 'Missing x or y coordinate'})
+                return
+
+            print(f"\n[HTTP] /uia/click_at_position - Request: x={x}, y={y}")
+            result = self.uia_helper.click_at_position(x, y)
+            print(f"[HTTP] /uia/click_at_position - Response: {result}")
+            self.send_json_response(result)
+            print(f"[HTTP] /uia/click_at_position - Response sent\n")
+
+        elif self.path == '/uia/find_element':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            request_data = json.loads(post_data.decode('utf-8'))
+
+            automation_id = request_data.get('automation_id')
+
+            if not automation_id:
+                self.send_json_response({'success': False, 'error': 'Missing automation_id'})
+                return
+
+            print(f"\n[HTTP] /uia/find_element - Request: automation_id={automation_id}")
+            result = self.uia_helper.find_element_by_automation_id(automation_id)
+            print(f"[HTTP] /uia/find_element - Response: {result}")
+            self.send_json_response(result)
+            print(f"[HTTP] /uia/find_element - Response sent\n")
         else:
             self.send_error(404, "Not Found")
     
@@ -466,9 +679,11 @@ def main():
     print(f"监听地址: http://{host}:{port}")
     print("=" * 60)
     print("\n可用的API端点:")
-    print("  GET  /uia/get_popup_state      - 获取Popup状态")
-    print("  POST /uia/find_popup           - 查找Popup窗口")
-    print("  POST /uia/select_and_confirm   - 选择并确认")
+    print("  GET  /uia/get_popup_state        - 获取Popup状态")
+    print("  POST /uia/find_popup             - 查找Popup窗口")
+    print("  POST /uia/select_and_confirm     - 选择并确认")
+    print("  POST /uia/click_at_position      - 在屏幕坐标执行真实鼠标点击")
+    print("  POST /uia/find_element           - 通过AutomationId查找元素并返回屏幕坐标")
     print("\n按 Ctrl+C 停止服务器\n")
     
     try:
