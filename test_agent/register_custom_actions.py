@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from test_agent.view import SetSessionStorageAction
 from test_agent.config import config
-from test_agent.custom_actions.uia_click import register_uia_click
+from test_agent.custom_actions.os_click import register_os_click
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -48,8 +48,8 @@ def register_custom_actions(tools: Tools):
     - 使用新版的 Agent API
     """
 
-    # Register uia_click for real OS-level mouse clicks
-    register_uia_click(tools.registry)
+    # Register os_click for real OS-level mouse clicks
+    register_os_click(tools.registry)
 
     async def call_agent(
         task: str,

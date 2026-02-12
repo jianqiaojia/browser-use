@@ -244,39 +244,59 @@ class UIAHelper:
     
     def get_popup_element(self) -> Optional[Any]:
         """获取Popup窗口的UI元素"""
+        print(f"[get_popup_element] Starting...")
         result = self.find_autofill_popup()
-        if not result.get('success'):
+        if result is None or not result.get('success'):
+            error_msg = result.get('error', 'Unknown') if result else 'find_autofill_popup returned None'
+            print(f"[get_popup_element] find_autofill_popup failed: {error_msg}")
             return None
-        
+
         hwnd = result['hwnd']
+        print(f"[get_popup_element] Got hwnd: {hwnd}")
         try:
             # 从窗口句柄获取UI元素
             element = self.uia.ElementFromHandle(hwnd)
+            print(f"[get_popup_element] ElementFromHandle succeeded, returning element")
             return element
         except Exception as e:
-            print(f"Error getting element from handle: {e}")
+            print(f"[get_popup_element] Error getting element from handle: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def find_list_items(self, parent_element: Any) -> List[Any]:
         """查找列表项"""
         try:
+            print(f"[find_list_items] Searching for ListItem controls...")
             condition = self.uia.CreatePropertyCondition(
                 UIAutomationClient.UIA_ControlTypePropertyId,
                 UIAutomationClient.UIA_ListItemControlTypeId
             )
-            
+
             items = parent_element.FindAll(
                 UIAutomationClient.TreeScope_Descendants,
                 condition
             )
-            
+
+            print(f"[find_list_items] FindAll returned {items.Length} items")
+
             result = []
             for i in range(items.Length):
-                result.append(items.GetElement(i))
-            
+                element = items.GetElement(i)
+                try:
+                    name = element.CurrentName
+                    control_type = element.CurrentControlType
+                    print(f"[find_list_items] Item {i}: name='{name}', type={control_type}")
+                except Exception as e:
+                    print(f"[find_list_items] Item {i}: Error getting info - {e}")
+                result.append(element)
+
+            print(f"[find_list_items] Returning {len(result)} list items")
             return result
         except Exception as e:
-            print(f"Error finding list items: {e}")
+            print(f"[find_list_items] Exception: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def find_buttons(self, parent_element: Any) -> List[Any]:
@@ -376,29 +396,42 @@ class UIAHelper:
             包含Popup状态的字典
         """
         try:
+            print(f"\n[get_popup_state] Starting...")
             popup = self.get_popup_element()
             if popup is None:
+                print(f"[get_popup_state] Popup element is None - popup not found")
                 return {'success': False, 'visible': False}
+
+            print(f"[get_popup_state] Popup element found, searching for list items...")
 
             # 获取列表项
             items = self.find_list_items(popup)
+            print(f"[get_popup_state] Found {len(items)} list items")
+
             addresses = []
 
-            for item in items:
+            for i, item in enumerate(items):
                 try:
                     name = item.CurrentName
+                    print(f"[get_popup_state] Item {i}: '{name}'")
                     addresses.append(name)
-                except:
+                except Exception as e:
+                    print(f"[get_popup_state] Item {i}: Error reading name - {e}")
                     addresses.append("(无法读取)")
 
-            return {
+            result = {
                 'success': True,
                 'visible': True,
                 'item_count': len(items),
                 'items': addresses
             }
+            print(f"[get_popup_state] Result: {result}")
+            return result
 
         except Exception as e:
+            print(f"[get_popup_state] Exception: {e}")
+            import traceback
+            traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
     def click_at_position(self, x: int, y: int) -> Dict[str, Any]:
@@ -443,138 +476,6 @@ class UIAHelper:
                 'success': False,
                 'error': f'Failed to click at position ({x}, {y}): {str(e)}'
             }
-
-    def find_element_by_automation_id(self, automation_id: str) -> Dict[str, Any]:
-        """
-        通过 AutomationId 查找元素并返回其屏幕坐标
-
-        Args:
-            automation_id: 元素的 AutomationId (例如: "email")
-
-        Returns:
-            包含元素屏幕坐标的字典
-        """
-        try:
-            print(f"\n{'='*60}")
-            print(f"Searching for element with AutomationId: {automation_id}")
-            print(f"{'='*60}")
-
-            # 查找所有Chrome浏览器窗口
-            class_condition = self.uia.CreatePropertyCondition(
-                UIAutomationClient.UIA_ClassNamePropertyId,
-                "Chrome_WidgetWin_1"
-            )
-            windows = self.root.FindAll(
-                UIAutomationClient.TreeScope_Children,
-                class_condition
-            )
-
-            print(f"Found {windows.Length} Chrome windows")
-
-            # 在每个Chrome窗口内搜索元素
-            for i in range(windows.Length):
-                window = windows.GetElement(i)
-
-                try:
-                    name = window.CurrentName
-                    # 只在Edge浏览器窗口中搜索
-                    if 'edge' not in name.lower() and 'microsoft' not in name.lower():
-                        continue
-
-                    print(f"\nSearching in browser: {name}")
-
-                    # 搜索具有指定 AutomationId 的元素
-                    automation_id_condition = self.uia.CreatePropertyCondition(
-                        UIAutomationClient.UIA_AutomationIdPropertyId,
-                        automation_id
-                    )
-
-                    element = window.FindFirst(
-                        UIAutomationClient.TreeScope_Descendants,
-                        automation_id_condition
-                    )
-
-                    if element:
-                        try:
-                            rect = element.CurrentBoundingRectangle
-                            x = rect.left
-                            y = rect.top
-                            width = rect.right - rect.left
-                            height = rect.bottom - rect.top
-                            center_x = x + width // 2
-                            center_y = y + height // 2
-
-                            print(f"✅ Found element!")
-                            print(f"  Position: ({x}, {y})")
-                            print(f"  Size: {width}x{height}")
-                            print(f"  Center: ({center_x}, {center_y})")
-
-                            return {
-                                'success': True,
-                                'bounds': {
-                                    'x': x,
-                                    'y': y,
-                                    'width': width,
-                                    'height': height,
-                                    'center_x': center_x,
-                                    'center_y': center_y
-                                },
-                                'name': element.CurrentName
-                            }
-                        except Exception as e:
-                            print(f"Error getting element bounds: {e}")
-                            continue
-
-                except Exception as e:
-                    print(f"  Error searching in window: {e}")
-                    continue
-
-            print(f"\n❌ Element with AutomationId '{automation_id}' not found")
-            return {'success': False, 'error': f'Element with AutomationId {automation_id} not found'}
-
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
-
-    def click_element_by_automation_id(self, automation_id: str) -> Dict[str, Any]:
-        """
-        通过 AutomationId 查找元素并直接点击其中心位置
-
-        这个方法组合了查找和点击，避免了手动计算坐标的问题。
-        UIA 的 CurrentBoundingRectangle 直接返回屏幕坐标，非常可靠。
-
-        Args:
-            automation_id: 元素的 AutomationId (例如: "email")
-
-        Returns:
-            操作结果字典
-        """
-        try:
-            # 先查找元素
-            find_result = self.find_element_by_automation_id(automation_id)
-
-            if not find_result.get('success'):
-                return find_result
-
-            # 获取元素中心坐标
-            bounds = find_result['bounds']
-            center_x = bounds['center_x']
-            center_y = bounds['center_y']
-
-            # 点击中心位置
-            print(f"\n🖱️  Clicking element at center: ({center_x}, {center_y})")
-            click_result = self.click_at_position(center_x, center_y)
-
-            if click_result.get('success'):
-                return {
-                    'success': True,
-                    'message': f"Clicked element '{automation_id}' at ({center_x}, {center_y})",
-                    'bounds': bounds
-                }
-            else:
-                return click_result
-
-        except Exception as e:
-            return {'success': False, 'error': str(e)}
 
 
 class UIARequestHandler(BaseHTTPRequestHandler):
@@ -627,23 +528,6 @@ class UIARequestHandler(BaseHTTPRequestHandler):
             print(f"[HTTP] /uia/click_at_position - Response: {result}")
             self.send_json_response(result)
             print(f"[HTTP] /uia/click_at_position - Response sent\n")
-
-        elif self.path == '/uia/find_element':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            request_data = json.loads(post_data.decode('utf-8'))
-
-            automation_id = request_data.get('automation_id')
-
-            if not automation_id:
-                self.send_json_response({'success': False, 'error': 'Missing automation_id'})
-                return
-
-            print(f"\n[HTTP] /uia/find_element - Request: automation_id={automation_id}")
-            result = self.uia_helper.find_element_by_automation_id(automation_id)
-            print(f"[HTTP] /uia/find_element - Response: {result}")
-            self.send_json_response(result)
-            print(f"[HTTP] /uia/find_element - Response sent\n")
         else:
             self.send_error(404, "Not Found")
     
@@ -683,7 +567,6 @@ def main():
     print("  POST /uia/find_popup             - 查找Popup窗口")
     print("  POST /uia/select_and_confirm     - 选择并确认")
     print("  POST /uia/click_at_position      - 在屏幕坐标执行真实鼠标点击")
-    print("  POST /uia/find_element           - 通过AutomationId查找元素并返回屏幕坐标")
     print("\n按 Ctrl+C 停止服务器\n")
     
     try:

@@ -1,7 +1,7 @@
 """
-测试 UIA Click 坐标计算
+测试 OS Click 坐标计算
 
-直接调用 uia_click.py 的坐标计算和点击逻辑来验证是否正确
+直接调用 os_click.py 的坐标计算和点击逻辑来验证是否正确
 """
 
 import asyncio
@@ -15,9 +15,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from test_agent.config import config
 
-async def test_uia_click():
+async def test_os_click():
 	print("="*60)
-	print("测试 UIA Click 坐标计算")
+	print("测试 OS Click 坐标计算")
 	print("="*60)
 
 	async with async_playwright() as p:
@@ -75,7 +75,7 @@ async def test_uia_click():
 		print("\n查找 email input 元素...")
 		email_selector = 'input[type="email"]'
 
-		# 获取元素的 id 或 name 属性（uia_click 需要这些）
+		# 获取元素的 id 或 name 属性（os_click 需要这些）
 		element_info = await page.evaluate(f'''() => {{
 			const element = document.querySelector('{email_selector}');
 			if (!element) return null;
@@ -100,13 +100,13 @@ async def test_uia_click():
 			print(f"  name: {element_info['name']}")
 			selector = f"[name=\"{element_info['name']}\"]"
 
-		# 执行和 uia_click.py 一样的坐标计算
+		# 执行和 os_click.py 一样的坐标计算
 		print(f"\n{'='*60}")
-		print("执行 UIA Click 坐标计算（与 uia_click.py 相同的逻辑）")
+		print("执行 OS Click 坐标计算（与 os_click.py 相同的逻辑）")
 		print(f"{'='*60}")
 
 		try:
-			# 和 uia_click.py 一样的 JavaScript 评估
+			# 和 os_click.py 一样的 JavaScript 评估
 			js_data = await page.evaluate(f'''() => {{
 				const element = document.querySelector('{selector}');
 				if (!element) {{
@@ -161,7 +161,7 @@ async def test_uia_click():
 				await context.close()
 				return
 
-			# 和 uia_click.py 一样的坐标计算
+			# 和 os_click.py 一样的坐标计算
 			js_rect = js_data['rect']
 			viewport_x = js_rect['centerX']
 			viewport_y = js_rect['centerY']
@@ -175,7 +175,7 @@ async def test_uia_click():
 			top_chrome_height = float(js_data['outerHeight']) - float(js_data['innerHeight'])
 			automation_bar_height = float(js_data.get('automationBarHeight', 0))
 
-			# 计算屏幕坐标（与 uia_click.py 完全相同）
+			# 计算屏幕坐标（与 os_click.py 完全相同）
 			if window_x < 0:
 				# Maximized window
 				screen_x = int(abs(window_x) + viewport_x)
@@ -186,12 +186,12 @@ async def test_uia_click():
 			# Y coordinate
 			screen_y = int(window_y + top_chrome_height + viewport_y)
 
-			# 输出调试信息（与 uia_click.py 相同格式）
+			# 输出调试信息（与 os_click.py 相同格式）
 			is_maximized = window_x < 0
 			border_offset = abs(window_x) if is_maximized else 0
 
 			debug_info = f'''
-UIA Click 坐标计算:
+OS Click 坐标计算:
   Element: {element_info['tag']} id={element_info.get('id', '')} name={element_info.get('name', '')}
 
   Viewport Coordinates (from getBoundingClientRect):
@@ -239,14 +239,14 @@ UIA Click 坐标计算:
 				result = response.json()
 
 				if result.get('success'):
-					print(f"\n✅ UIA Click 成功!")
+					print(f"\n✅ OS Click 成功!")
 					print(f"   点击位置: ({screen_x}, {screen_y})")
 					print(f"\n请观察:")
 					print(f"  1. 鼠标是否移动到了 email input 的中心位置")
 					print(f"  2. email input 是否获得了焦点")
 					print(f"  3. Edge 的 Express Checkout popup 是否出现")
 				else:
-					print(f"\n❌ UIA Click 失败: {result.get('error', 'Unknown error')}")
+					print(f"\n❌ OS Click 失败: {result.get('error', 'Unknown error')}")
 
 			except requests.exceptions.ConnectionError:
 				print("\n❌ 无法连接到 UIA Helper 服务器")
@@ -265,4 +265,4 @@ UIA Click 坐标计算:
 		await context.close()
 
 if __name__ == '__main__':
-	asyncio.run(test_uia_click())
+	asyncio.run(test_os_click())

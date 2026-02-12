@@ -1,7 +1,8 @@
 """
-UIA Click Action - Use Windows UI Automation to click elements
+OS Click Action - Calculate screen coordinates and perform OS-level mouse clicks
 
-This uses UIA Helper to perform real OS-level mouse clicks, which are
+This action calculates the screen coordinates of a DOM element and sends them
+to a helper service to perform real OS-level mouse clicks, which are
 indistinguishable from manual user clicks. This bypasses all browser-level
 detection mechanisms.
 """
@@ -14,32 +15,32 @@ from browser_use.tools.registry.service import Registry
 from browser_use.agent.views import ActionResult
 
 
-class UIAClickAction(BaseModel):
-	"""UIA click action that uses Windows UI Automation."""
+class OSClickAction(BaseModel):
+	"""OS-level click action that calculates coordinates and triggers real mouse click."""
 
 	index: int = Field(
-		description='DOM element index to click via UIA'
+		description='DOM element index to click via OS-level mouse action'
 	)
 
 
-async def execute_uia_click(
-	params: UIAClickAction,
+async def execute_os_click(
+	params: OSClickAction,
 	browser_session: BrowserSession,
 ) -> ActionResult:
 	"""
-	Execute click using Windows UI Automation via UIA Helper.
+	Calculate screen coordinates and execute OS-level mouse click via helper service.
 
 	This performs a real OS-level mouse click that is indistinguishable from
 	manual user interaction. Edge and website JavaScript will treat this as
 	a genuine user click.
 
 	Steps:
-	1. Get element coordinates from browser
-	2. Convert to screen coordinates
-	3. Use UIA Helper to perform OS-level mouse click
+	1. Get element coordinates from browser (viewport-relative)
+	2. Calculate screen coordinates (window position + chrome height + viewport coords)
+	3. Send coordinates to helper service for OS-level mouse click
 
 	Args:
-		params: Click parameters
+		params: Click parameters (element index)
 		browser_session: Browser session for coordinate lookup
 
 	Returns:
@@ -264,7 +265,7 @@ UIA Click Debug:
 		result = response.json()
 
 		if result.get('success'):
-			msg = f'✅ UIA clicked: {tag} {attr_str} at screen ({screen_x}, {screen_y}) [viewport: ({viewport_x:.1f}, {viewport_y:.1f})]'
+			msg = f'✅ OS click executed: {tag} {attr_str} at screen ({screen_x}, {screen_y}) [viewport: ({viewport_x:.1f}, {viewport_y:.1f})]'
 
 			return ActionResult(
 				extracted_content=msg,
@@ -273,45 +274,45 @@ UIA Click Debug:
 		else:
 			error = result.get('error', 'Unknown error')
 			return ActionResult(
-				error=f'❌ UIA click failed: {error}',
+				error=f'❌ OS click failed: {error}',
 				include_in_memory=True,
 				success=False
 			)
 
 	except Exception as e:
 		return ActionResult(
-			error=f'❌ Failed to call UIA Helper: {str(e)}',
+			error=f'❌ Failed to call click helper service: {str(e)}',
 			include_in_memory=True,
 			success=False
 		)
 
 
-def register_uia_click(registry: Registry) -> None:
+def register_os_click(registry: Registry) -> None:
 	"""
-	Register the uia_click action to the tools registry.
+	Register the os_click action to the tools registry.
 
 	Usage:
 		from browser_use import Tools
-		from test_agent.custom_actions.uia_click import register_uia_click
+		from test_agent.custom_actions.os_click import register_os_click
 
 		tools = Tools()
-		register_uia_click(tools.registry)
+		register_os_click(tools.registry)
 	"""
 
 	@registry.action(
-		description='Click element using Windows UI Automation (real OS-level mouse click, bypasses all detection)',
-		param_model=UIAClickAction,
+		description='Click element using OS-level mouse action (real mouse click via helper service, bypasses all detection)',
+		param_model=OSClickAction,
 	)
-	async def uia_click(
-		params: UIAClickAction,
+	async def os_click(
+		params: OSClickAction,
 		browser_session: BrowserSession,
 	) -> ActionResult:
 		"""
-		Execute click using Windows UI Automation.
+		Calculate screen coordinates and execute OS-level mouse click.
 
-		This performs a real OS-level mouse click that bypasses all browser and
-		JavaScript-level detection mechanisms. Edge autofill will treat this as
-		a genuine user click.
+		This calculates the element's screen position and sends coordinates to
+		a helper service that performs a real OS-level mouse click. This bypasses
+		all browser and JavaScript-level detection mechanisms.
 
 		Args:
 			params: Click parameters (element index)
@@ -320,4 +321,4 @@ def register_uia_click(registry: Registry) -> None:
 		Returns:
 			ActionResult with success/error
 		"""
-		return await execute_uia_click(params, browser_session)
+		return await execute_os_click(params, browser_session)
