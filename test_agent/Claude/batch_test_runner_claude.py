@@ -8,6 +8,8 @@ import asyncio
 import json
 import sys
 import os
+import ctypes
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +25,94 @@ from test_agent.Claude.integration.llm_config import get_claude_sonnet
 from test_agent.config import config
 from test_agent.view import TestCase, ECTest, TestStep
 from test_agent.register_custom_actions import register_custom_actions
+
+
+# Windows API constants for preventing sleep
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
+
+
+def prevent_sleep():
+	"""Prevent system from entering sleep/low-power state during tests."""
+	try:
+		ctypes.windll.kernel32.SetThreadExecutionState(
+			ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+		)
+		print("[Sleep Prevention] ✅ System sleep disabled for test duration")
+		return True
+	except Exception as e:
+		print(f"[Sleep Prevention] ⚠️ Could not disable sleep: {e}")
+		return False
+
+
+def allow_sleep():
+	"""Re-enable system sleep after tests complete."""
+	try:
+		ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+		print("[Sleep Prevention] ✅ System sleep re-enabled")
+	except Exception as e:
+		print(f"[Sleep Prevention] ⚠️ Could not re-enable sleep: {e}")
+
+
+def kill_edge_processes():
+	"""Kill all Edge browser processes to ensure clean state between test runs."""
+	import subprocess
+	import time
+
+	try:
+		print("[Cleanup] Checking for Edge browser processes...")
+
+		# Find all msedge.exe processes
+		result = subprocess.run(
+			['tasklist', '/FI', 'IMAGENAME eq msedge.exe', '/FO', 'CSV'],
+			capture_output=True,
+			text=True,
+			timeout=5
+		)
+
+		# Check if any Edge processes are running
+		if 'msedge.exe' in result.stdout:
+			lines = result.stdout.strip().split('\n')
+			# Subtract header line
+			process_count = len(lines) - 1
+			print(f"[Cleanup] Found {process_count} Edge process(es), terminating...")
+
+			# Kill all Edge processes forcefully
+			subprocess.run(
+				['taskkill', '/F', '/IM', 'msedge.exe', '/T'],
+				capture_output=True,
+				timeout=10
+			)
+
+			# Wait for processes to fully terminate
+			print("[Cleanup] Waiting 3 seconds for processes to terminate...")
+			time.sleep(3)
+
+			# Verify processes are gone
+			verify = subprocess.run(
+				['tasklist', '/FI', 'IMAGENAME eq msedge.exe', '/FO', 'CSV'],
+				capture_output=True,
+				text=True,
+				timeout=5
+			)
+
+			if 'msedge.exe' not in verify.stdout:
+				print("[Cleanup] ✅ All Edge processes terminated successfully")
+			else:
+				remaining = len(verify.stdout.strip().split('\n')) - 1
+				print(f"[Cleanup] ⚠️ Warning: {remaining} Edge process(es) still running")
+		else:
+			print("[Cleanup] ✅ No Edge processes found")
+
+		return True
+
+	except subprocess.TimeoutExpired:
+		print("[Cleanup] ⚠️ Timeout while checking/killing Edge processes")
+		return False
+	except Exception as e:
+		print(f"[Cleanup] ⚠️ Error during cleanup: {e}")
+		return False
 
 
 def build_task_from_steps(steps: list[TestStep]) -> str:
@@ -109,10 +199,8 @@ async def run_test_case(
 		# Add timestamp and repeat number to filename to avoid overwriting
 		from datetime import datetime
 		timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-		if repeat_num > 1:
-			history_file = f"test_case/{safe_name}_claude_run{repeat_num}_{timestamp}.history.json"
-		else:
-			history_file = f"test_case/{safe_name}_claude_{timestamp}.history.json"
+		
+		history_file = f"test_case_log/{safe_name}_claude_run{repeat_num}_{timestamp}.history.json"
 
 		print(f"\n[Save] Saving history to {history_file}")
 		try:
@@ -300,6 +388,10 @@ async def main():
 
 	args = parser.parse_args()
 
+	# Prevent system sleep during batch testing
+	print("\n[Init] Preventing system sleep...")
+	prevent_sleep()
+
 	# Initialize proxy pool if requested
 	if args.use_proxy_pool:
 		print(f"\n[Init] Initializing free proxy pool...")
@@ -369,6 +461,12 @@ async def main():
 			)
 			if not success:
 				run_success = False
+
+			# CRITICAL: Kill all Edge browser processes between test runs
+			# This prevents profile lock conflicts when using the same Edge profile
+			if run_num < repeat_count:
+				print(f"\n[Cleanup] Killing Edge browser processes between runs...")
+				kill_edge_processes()
 
 		all_results.append(run_success)
 

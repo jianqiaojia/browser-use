@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from test_agent.view import SetSessionStorageAction
 from test_agent.config import config
 from test_agent.custom_actions.os_click import register_os_click
+from test_agent.custom_actions.cdp_click import register_cdp_click
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -50,6 +51,9 @@ def register_custom_actions(tools: Tools):
 
     # Register os_click for real OS-level mouse clicks
     register_os_click(tools.registry)
+
+    # Register cdp_click for CDP clicks with window focus management
+    register_cdp_click(tools.registry)
 
     async def call_agent(
         task: str,

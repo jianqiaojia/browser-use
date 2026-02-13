@@ -268,6 +268,45 @@ class UIAHelper:
         """查找列表项"""
         try:
             print(f"[find_list_items] Searching for ListItem controls...")
+
+            # DEBUG: 先看看parent_element下面有什么类型的控件
+            print(f"[find_list_items] DEBUG: Enumerating all controls...")
+            try:
+                all_condition = self.uia.CreateTrueCondition()
+
+                # 1. 直接子元素
+                direct_children = parent_element.FindAll(
+                    UIAutomationClient.TreeScope_Children,
+                    all_condition
+                )
+                print(f"[find_list_items] DEBUG: Found {direct_children.Length} direct children")
+                for i in range(min(5, direct_children.Length)):
+                    try:
+                        child = direct_children.GetElement(i)
+                        name = child.CurrentName
+                        control_type = child.CurrentControlType
+                        print(f"[find_list_items] DEBUG:   Direct child {i}: type={control_type}, name='{name}'")
+                    except Exception as e:
+                        print(f"[find_list_items] DEBUG:   Direct child {i}: Error - {e}")
+
+                # 2. 所有后代元素（前20个）
+                all_descendants = parent_element.FindAll(
+                    UIAutomationClient.TreeScope_Descendants,
+                    all_condition
+                )
+                print(f"[find_list_items] DEBUG: Found {all_descendants.Length} total descendants")
+                for i in range(min(20, all_descendants.Length)):
+                    try:
+                        desc = all_descendants.GetElement(i)
+                        name = desc.CurrentName
+                        control_type = desc.CurrentControlType
+                        print(f"[find_list_items] DEBUG:   Descendant {i}: type={control_type}, name='{name}'")
+                    except Exception as e:
+                        print(f"[find_list_items] DEBUG:   Descendant {i}: Error - {e}")
+            except Exception as e:
+                print(f"[find_list_items] DEBUG: Failed to enumerate - {e}")
+
+            # 原有逻辑：查找 ListItem
             condition = self.uia.CreatePropertyCondition(
                 UIAutomationClient.UIA_ControlTypePropertyId,
                 UIAutomationClient.UIA_ListItemControlTypeId
@@ -278,7 +317,7 @@ class UIAHelper:
                 condition
             )
 
-            print(f"[find_list_items] FindAll returned {items.Length} items")
+            print(f"[find_list_items] FindAll returned {items.Length} ListItem items")
 
             result = []
             for i in range(items.Length):
@@ -298,7 +337,55 @@ class UIAHelper:
             import traceback
             traceback.print_exc()
             return []
-    
+
+    def find_option_buttons(self, parent_element: Any) -> List[Any]:
+        """
+        查找 autofill 选项按钮
+
+        在 Edge autofill popup 中，用户信息选项（Contact info / Payment methods）
+        是 Button 类型，不是 ListItem 类型
+        """
+        try:
+            print(f"[find_option_buttons] Searching for option buttons...")
+
+            # 查找所有 Button 类型的元素
+            condition = self.uia.CreatePropertyCondition(
+                UIAutomationClient.UIA_ControlTypePropertyId,
+                UIAutomationClient.UIA_ButtonControlTypeId
+            )
+
+            buttons = parent_element.FindAll(
+                UIAutomationClient.TreeScope_Descendants,
+                condition
+            )
+
+            print(f"[find_option_buttons] Found {buttons.Length} total buttons")
+
+            # 过滤出真正的选项按钮（排除 "Autofill", "More actions" 等操作按钮）
+            options = []
+            for i in range(buttons.Length):
+                button = buttons.GetElement(i)
+                try:
+                    name = button.CurrentName
+
+                    # 选项按钮的特征：name 很长，包含 "Contact info" 或 "Payment methods"
+                    if name and len(name) > 50:
+                        if 'Contact info' in name or 'Payment methods' in name:
+                            print(f"[find_option_buttons] Option {len(options)}: '{name[:80]}...'")
+                            options.append(button)
+                except Exception as e:
+                    print(f"[find_option_buttons] Error reading button {i}: {e}")
+                    continue
+
+            print(f"[find_option_buttons] Returning {len(options)} option buttons")
+            return options
+
+        except Exception as e:
+            print(f"[find_option_buttons] Exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
     def find_buttons(self, parent_element: Any) -> List[Any]:
         """查找按钮"""
         try:
@@ -338,11 +425,11 @@ class UIAHelper:
     def select_and_confirm(self, profile_index: int = 0, payment_index: int = 0) -> Dict[str, Any]:
         """
         选择地址/支付方式并确认
-        
+
         Args:
             profile_index: 地址索引（默认0，选择第一个）
             payment_index: 支付方式索引（默认0）
-        
+
         Returns:
             操作结果字典
         """
@@ -350,33 +437,32 @@ class UIAHelper:
             popup = self.get_popup_element()
             if popup is None:
                 return {'success': False, 'error': 'Popup not found'}
-            
-            # 1. 查找并选择地址
-            list_items = self.find_list_items(popup)
-            print(f"Found {len(list_items)} list items")
-            
-            if len(list_items) > profile_index:
-                print(f"Selecting item at index {profile_index}")
-                self.invoke_element(list_items[profile_index])
+
+            # 1. 查找选项按钮（使用新的 find_option_buttons）
+            option_buttons = self.find_option_buttons(popup)
+            print(f"Found {len(option_buttons)} option buttons")
+
+            if len(option_buttons) > profile_index:
+                print(f"Selecting option button at index {profile_index}")
+                self.invoke_element(option_buttons[profile_index])
                 time.sleep(0.3)  # 等待UI响应
-            
+
             # 2. 查找并点击 Autofill 按钮
-            # 根据 edge_express_checkout_view.cc line 2700: IDS_EDGE_EC_INLINE_AUTOFILL
-            buttons = self.find_buttons(popup)
-            print(f"Found {len(buttons)} buttons")
-            
+            all_buttons = self.find_buttons(popup)
+            print(f"Found {len(all_buttons)} total buttons")
+
             autofill_button = None
-            for button in buttons:
+            for button in all_buttons:
                 try:
                     name = button.CurrentName
                     print(f"Button name: {name}")
-                    if 'autofill' in name.lower():
+                    if name and name.strip() == 'Autofill':  # 精确匹配 "Autofill"
                         autofill_button = button
-                        print(f"Found Autofill button: {name}")
+                        print(f"Found Autofill button")
                         break
                 except:
                     continue
-            
+
             if autofill_button:
                 print("Clicking Autofill button")
                 self.invoke_element(autofill_button)
@@ -384,7 +470,7 @@ class UIAHelper:
             else:
                 print("Warning: Autofill button not found, but selection may have succeeded")
                 return {'success': True, 'warning': 'Autofill button not found'}
-            
+
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
@@ -402,30 +488,29 @@ class UIAHelper:
                 print(f"[get_popup_state] Popup element is None - popup not found")
                 return {'success': False, 'visible': False}
 
-            print(f"[get_popup_state] Popup element found, searching for list items...")
+            print(f"[get_popup_state] Popup element found, searching for option buttons...")
 
-            # 获取列表项
-            items = self.find_list_items(popup)
-            print(f"[get_popup_state] Found {len(items)} list items")
+            # 使用新的 find_option_buttons 查找选项按钮
+            option_buttons = self.find_option_buttons(popup)
+            print(f"[get_popup_state] Found {len(option_buttons)} option buttons")
 
-            addresses = []
-
-            for i, item in enumerate(items):
+            options = []
+            for i, button in enumerate(option_buttons):
                 try:
-                    name = item.CurrentName
-                    print(f"[get_popup_state] Item {i}: '{name}'")
-                    addresses.append(name)
+                    name = button.CurrentName
+                    print(f"[get_popup_state] Option {i}: '{name[:100]}...'")
+                    options.append(name)
                 except Exception as e:
-                    print(f"[get_popup_state] Item {i}: Error reading name - {e}")
-                    addresses.append("(无法读取)")
+                    print(f"[get_popup_state] Option {i}: Error reading name - {e}")
+                    options.append("(无法读取)")
 
             result = {
                 'success': True,
                 'visible': True,
-                'item_count': len(items),
-                'items': addresses
+                'item_count': len(option_buttons),
+                'items': options
             }
-            print(f"[get_popup_state] Result: {result}")
+            print(f"[get_popup_state] Result: item_count={len(option_buttons)}")
             return result
 
         except Exception as e:
@@ -449,7 +534,7 @@ class UIAHelper:
         """
         try:
             # 保存当前鼠标位置
-            current_pos = win32api.GetCursorPos()
+            # current_pos = win32api.GetCursorPos()
 
             # 移动鼠标到目标位置
             win32api.SetCursorPos((x, y))
