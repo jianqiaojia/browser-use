@@ -92,15 +92,39 @@ class UIAHelper:
                     UIAutomationClient.UIA_ButtonControlTypeId
                 )
                 buttons = window.FindAll(UIAutomationClient.TreeScope_Descendants, button_condition)
-                
+                print(f"-------------  Found {buttons.Length} buttons in Pane")
                 for i in range(buttons.Length):
                     try:
                         btn = buttons.GetElement(i)
                         name = btn.CurrentName
+                        print(f"    Pane Button {i}: '{name}'")
                         if name and name.strip():
                             all_text_content.append(name)
                     except:
                         continue
+
+                # 额外查找：在父窗口中查找 Autofill 按钮（Footer 层级）
+                try:
+                    tree_walker = self.uia.CreateTreeWalker(self.uia.CreateTrueCondition())
+                    parent = tree_walker.GetParentElement(window)
+                    if parent:
+                        print(f"  Searching Autofill button in parent element...")
+                        parent_buttons = parent.FindAll(UIAutomationClient.TreeScope_Descendants, button_condition)
+                        print(f"+++++++++++++++  Found {parent_buttons.Length} buttons in parent")
+                        for i in range(parent_buttons.Length):
+                            try:
+                                btn = parent_buttons.GetElement(i)
+                                name = btn.CurrentName
+                                # 只添加 Autofill/More 按钮，避免重复
+                                if name and ('Autofill' in name or 'More' in name or 'actions' in name):
+                                    if name.strip() not in all_text_content:
+                                        print(f"    Parent Button {i}: '{name}'")
+                                        all_text_content.append(name.strip())
+                            except:
+                                continue
+                except Exception as e:
+                    print(f"  No parent or error searching parent: {e}")
+
             except Exception as e:
                 print(f"  ✗ Error getting buttons: {e}")
             
@@ -264,79 +288,79 @@ class UIAHelper:
             traceback.print_exc()
             return None
     
-    def find_list_items(self, parent_element: Any) -> List[Any]:
-        """查找列表项"""
-        try:
-            print(f"[find_list_items] Searching for ListItem controls...")
+    # def find_list_items(self, parent_element: Any) -> List[Any]:
+    #     """查找列表项"""
+    #     try:
+    #         print(f"[find_list_items] Searching for ListItem controls...")
 
-            # DEBUG: 先看看parent_element下面有什么类型的控件
-            print(f"[find_list_items] DEBUG: Enumerating all controls...")
-            try:
-                all_condition = self.uia.CreateTrueCondition()
+    #         # DEBUG: 先看看parent_element下面有什么类型的控件
+    #         print(f"[find_list_items] DEBUG: Enumerating all controls...")
+    #         try:
+    #             all_condition = self.uia.CreateTrueCondition()
 
-                # 1. 直接子元素
-                direct_children = parent_element.FindAll(
-                    UIAutomationClient.TreeScope_Children,
-                    all_condition
-                )
-                print(f"[find_list_items] DEBUG: Found {direct_children.Length} direct children")
-                for i in range(min(5, direct_children.Length)):
-                    try:
-                        child = direct_children.GetElement(i)
-                        name = child.CurrentName
-                        control_type = child.CurrentControlType
-                        print(f"[find_list_items] DEBUG:   Direct child {i}: type={control_type}, name='{name}'")
-                    except Exception as e:
-                        print(f"[find_list_items] DEBUG:   Direct child {i}: Error - {e}")
+    #             # 1. 直接子元素
+    #             direct_children = parent_element.FindAll(
+    #                 UIAutomationClient.TreeScope_Children,
+    #                 all_condition
+    #             )
+    #             print(f"[find_list_items] DEBUG: Found {direct_children.Length} direct children")
+    #             for i in range(min(5, direct_children.Length)):
+    #                 try:
+    #                     child = direct_children.GetElement(i)
+    #                     name = child.CurrentName
+    #                     control_type = child.CurrentControlType
+    #                     print(f"[find_list_items] DEBUG:   Direct child {i}: type={control_type}, name='{name}'")
+    #                 except Exception as e:
+    #                     print(f"[find_list_items] DEBUG:   Direct child {i}: Error - {e}")
 
-                # 2. 所有后代元素（前20个）
-                all_descendants = parent_element.FindAll(
-                    UIAutomationClient.TreeScope_Descendants,
-                    all_condition
-                )
-                print(f"[find_list_items] DEBUG: Found {all_descendants.Length} total descendants")
-                for i in range(min(20, all_descendants.Length)):
-                    try:
-                        desc = all_descendants.GetElement(i)
-                        name = desc.CurrentName
-                        control_type = desc.CurrentControlType
-                        print(f"[find_list_items] DEBUG:   Descendant {i}: type={control_type}, name='{name}'")
-                    except Exception as e:
-                        print(f"[find_list_items] DEBUG:   Descendant {i}: Error - {e}")
-            except Exception as e:
-                print(f"[find_list_items] DEBUG: Failed to enumerate - {e}")
+    #             # 2. 所有后代元素（前20个）
+    #             all_descendants = parent_element.FindAll(
+    #                 UIAutomationClient.TreeScope_Descendants,
+    #                 all_condition
+    #             )
+    #             print(f"[find_list_items] DEBUG: Found {all_descendants.Length} total descendants")
+    #             for i in range(min(20, all_descendants.Length)):
+    #                 try:
+    #                     desc = all_descendants.GetElement(i)
+    #                     name = desc.CurrentName
+    #                     control_type = desc.CurrentControlType
+    #                     print(f"[find_list_items] DEBUG:   Descendant {i}: type={control_type}, name='{name}'")
+    #                 except Exception as e:
+    #                     print(f"[find_list_items] DEBUG:   Descendant {i}: Error - {e}")
+    #         except Exception as e:
+    #             print(f"[find_list_items] DEBUG: Failed to enumerate - {e}")
 
-            # 原有逻辑：查找 ListItem
-            condition = self.uia.CreatePropertyCondition(
-                UIAutomationClient.UIA_ControlTypePropertyId,
-                UIAutomationClient.UIA_ListItemControlTypeId
-            )
+    #         # 原有逻辑：查找 ListItem
+    #         condition = self.uia.CreatePropertyCondition(
+    #             UIAutomationClient.UIA_ControlTypePropertyId,
+    #             UIAutomationClient.UIA_ListItemControlTypeId
+    #         )
 
-            items = parent_element.FindAll(
-                UIAutomationClient.TreeScope_Descendants,
-                condition
-            )
+    #         items = parent_element.FindAll(
+    #             UIAutomationClient.TreeScope_Descendants,
+    #             condition
+    #         )
 
-            print(f"[find_list_items] FindAll returned {items.Length} ListItem items")
+    #         print(f"[find_list_items] FindAll returned {items.Length} ListItem items")
 
-            result = []
-            for i in range(items.Length):
-                element = items.GetElement(i)
-                try:
-                    name = element.CurrentName
-                    control_type = element.CurrentControlType
-                    print(f"[find_list_items] Item {i}: name='{name}', type={control_type}")
-                except Exception as e:
-                    print(f"[find_list_items] Item {i}: Error getting info - {e}")
-                result.append(element)
+    #         result = []
+    #         for i in range(items.Length):
+    #             element = items.GetElement(i)
+    #             try:
+    #                 name = element.CurrentName
+    #                 control_type = element.CurrentControlType
+    #                 print(f"[find_list_items] Item {i}: name='{name}', type={control_type}")
+    #             except Exception as e:
+    #                 print(f"[find_list_items] Item {i}: Error getting info - {e}")
+    #             result.append(element)
 
-            print(f"[find_list_items] Returning {len(result)} list items")
-            return result
-        except Exception as e:
-            print(f"[find_list_items] Exception: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+    #         print(f"[find_list_items] Returning {len(result)} list items")
+    #         return result
+    #     except Exception as e:
+    #         print(f"[find_list_items] Exception: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return []
 
     def find_option_buttons(self, parent_element: Any) -> List[Any]:
         """

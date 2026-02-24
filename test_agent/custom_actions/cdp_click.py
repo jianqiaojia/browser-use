@@ -16,6 +16,7 @@ import win32gui
 import win32con
 import win32process
 import win32api
+import psutil
 import comtypes.client
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -74,17 +75,28 @@ def bring_window_to_foreground() -> bool:
 
 		print(f"[Focus] Found {windows.Length} Chrome-based windows")
 
-		# Find Edge window
+		# Find Edge window by process name
 		edge_hwnd = None
 		for i in range(windows.Length):
 			window = windows.GetElement(i)
 			try:
 				name = window.CurrentName
-				# Check if it's Edge (look for common keywords)
-				if any(keyword in name.lower() for keyword in ['edge', 'microsoft', 'chrome', 'checkout', 'nike']):
-					edge_hwnd = window.CurrentNativeWindowHandle
-					print(f"[Focus] ✅ Found browser window: {name} (hwnd={edge_hwnd})")
-					break
+				hwnd = window.CurrentNativeWindowHandle
+
+				# Get process ID and name
+				try:
+					_, pid = win32process.GetWindowThreadProcessId(hwnd)
+					process = psutil.Process(pid)
+					process_name = process.name().lower()
+
+					# Check if it's Edge browser process
+					if process_name == 'msedge.exe':
+						edge_hwnd = hwnd
+						print(f"[Focus] ✅ Found Edge browser window: {name} (hwnd={hwnd}, pid={pid})")
+						break
+				except Exception as e:
+					# Skip windows where we can't get process info
+					continue
 			except Exception as e:
 				continue
 
@@ -93,38 +105,50 @@ def bring_window_to_foreground() -> bool:
 			return False
 
 		# Multi-step aggressive focus setting
-		try:
-			# Step 1: Restore if minimized
-			if win32gui.IsIconic(edge_hwnd):
-				print(f"[Focus] Restoring minimized window...")
-				win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
+		# Step 1: Restore if minimized
+		if win32gui.IsIconic(edge_hwnd):
+			print(f"[Focus] Restoring minimized window...")
+			win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
 
-			# Step 2: Bring to top
-			win32gui.SetWindowPos(edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-			                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
+		# Step 2: Bring to top
+		# CRITICAL: Remove SWP_NOACTIVATE flag to allow window activation
+		# In Console Session (after tscon), SetWindowPos with HWND_TOP is sufficient
+		# to make Edge's HasFocus() return true, even though GetForegroundWindow()
+		# may still return a different hwnd. This works because:
+		# 1. Console Session treats the topmost window as having "visual focus"
+		# 2. Edge's RenderWidgetHostView::HasFocus() checks window activation state,
+		#    not just the global foreground window
+		win32gui.SetWindowPos(edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+		                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)  # No SWP_NOACTIVATE!
 
-			# Step 3: Attach to foreground thread to bypass restrictions
-			foreground_hwnd = win32gui.GetForegroundWindow()
-			foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
-			current_thread = win32api.GetCurrentThreadId()
-
-			if foreground_thread != current_thread:
+		# The following steps (AttachThreadInput + SetForegroundWindow) are NOT needed
+		# in Console Session. They will fail with ERROR_ACCESS_DENIED (error 5) after
+		# tscon, but the popup will still appear because SetWindowPos is sufficient.
+		#
+		# # Step 3: Attach to foreground thread (NOT NEEDED - fails in Console Session)
+		foreground_hwnd = win32gui.GetForegroundWindow()
+		foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
+		current_thread = win32api.GetCurrentThreadId()
+		if foreground_thread != current_thread:
+			try:
 				win32process.AttachThreadInput(foreground_thread, current_thread, True)
-
-			# Step 4: Set foreground
+				print(f"[Focus] ✅ AttachThreadInput(attach) succeeded")
+			except Exception as e:
+				print(f"[Focus] ⚠️  AttachThreadInput(attach) failed: {e}")
+		try:
 			win32gui.SetForegroundWindow(edge_hwnd)
-			# win32gui.SetFocus(edge_hwnd)
-
-			# Step 5: Detach threads
-			if foreground_thread != current_thread:
-				win32process.AttachThreadInput(foreground_thread, current_thread, False)
-
-			print(f"[Focus] ✅ Browser window brought to foreground")
-			return True
-
+			print(f"[Focus] ✅ SetForegroundWindow succeeded")
 		except Exception as e:
-			print(f"[Focus] ⚠️  Focus setting failed: {e}")
-			return False
+			print(f"[Focus] ⚠️  SetForegroundWindow failed: {e}")
+		if foreground_thread != current_thread:
+			try:
+				win32process.AttachThreadInput(foreground_thread, current_thread, False)
+				print(f"[Focus] ✅ AttachThreadInput(detach) succeeded")
+			except Exception as e:
+				print(f"[Focus] ⚠️  AttachThreadInput(detach) failed: {e}")
+
+		print(f"[Focus] ✅ Browser window brought to foreground")
+		return True
 
 	except Exception as e:
 		print(f"[Focus] ⚠️  Failed to bring window to foreground: {e}")
