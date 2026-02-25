@@ -530,6 +530,162 @@ def bring_window_to_foreground() -> bool:
 **参考实现：**
 - `test_agent/custom_actions/cdp_click.py` - `bring_window_to_foreground()`
 - `test_agent/test_script/test_cdp_attach_checkout_plan_b.py` - 完整测试脚本
+- `test_agent/test_script/tscon_with_allow.ps1` - tscon 自动化脚本
+
+### tscon 自动化脚本：AllowSetForegroundWindow 集成
+
+**解决的核心问题：**
+
+在 tscon 切换到 Console Session 后，Python 脚本需要调用 `SetForegroundWindow()` 将浏览器窗口设置为前台窗口。但 Windows 有严格的前台窗口限制：
+
+- **限制原因**: 防止恶意程序强制抢占用户焦点
+- **失败场景**: 当脚本不是当前前台进程时，`SetForegroundWindow()` 会静默失败
+- **解决方案**: 使用 `AllowSetForegroundWindow(PID)` API 授权特定进程设置前台窗口
+
+**自动化脚本实现：`tscon_with_allow.ps1`**
+
+该脚本自动化整个 tscon 流程，包括：
+
+1. **授权 Python 进程**：调用 `AllowSetForegroundWindow(PythonPid)` 授予权限
+2. **自动检测 RDP Session ID**：使用 `query session` 自动识别当前 RDP 会话
+3. **执行 tscon**：自动切换到 Console Session
+4. **UTF-8 BOM 编码**：支持中文字符显示
+
+**脚本用法：**
+
+```powershell
+# 在管理员 PowerShell 中执行
+.\tscon_with_allow.ps1 -PythonPid 12345
+```
+
+**脚本参数：**
+- `-PythonPid`: Python 脚本的进程 ID（必需），通过 `os.getpid()` 获取
+
+**Python 集成示例：**
+
+```python
+import os
+import subprocess
+from pathlib import Path
+
+# 获取当前 Python 进程 PID
+current_pid = os.getpid()
+
+# PowerShell 脚本路径
+TSCON_SCRIPT_PATH = Path(__file__).parent / "tscon_with_allow.ps1"
+
+# 检查脚本是否存在
+if not TSCON_SCRIPT_PATH.exists():
+    print(f"错误: tscon 辅助脚本不存在: {TSCON_SCRIPT_PATH}")
+    return
+
+# 使用 PowerShell Start-Process 以管理员权限执行脚本
+powershell_cmd = [
+    "powershell",
+    "-Command",
+    f'Start-Process powershell -ArgumentList \'-ExecutionPolicy Bypass -NoExit -File "{TSCON_SCRIPT_PATH.absolute()}" -PythonPid {current_pid}\' -Verb RunAs'
+]
+
+subprocess.Popen(powershell_cmd)
+
+# 注意: tscon 执行后 RDP 会断开，脚本自动等待 Console Session 稳定
+print("等待 30 秒让 Console Session 稳定...")
+await asyncio.sleep(30)
+```
+
+**关键技术点：**
+
+1. **AllowSetForegroundWindow API**:
+   ```powershell
+   Add-Type @"
+       using System;
+       using System.Runtime.InteropServices;
+       public class WinAPI {
+           [DllImport("user32.dll")]
+           public static extern bool AllowSetForegroundWindow(int dwProcessId);
+       }
+   "@
+
+   $result = [WinAPI]::AllowSetForegroundWindow($PythonPid)
+   ```
+
+2. **自动检测 RDP Session**:
+   ```powershell
+   $sessionOutput = query session
+   $currentSession = $sessionOutput | Where-Object { $_ -match '>' }
+
+   if ($currentSession -match '>\\s*(\\S+)\\s+\\S+\\s+(\\d+)\\s+Active') {
+       $sessionId = $matches[2]
+       tscon $sessionId /dest:console
+   }
+   ```
+
+3. **UAC 管理员权限提升**:
+   ```python
+   # Python 使用 Start-Process -Verb RunAs 请求管理员权限
+   Start-Process powershell -Verb RunAs -ArgumentList '...'
+   ```
+
+4. **编码问题解决**:
+   - 脚本使用 UTF-8 with BOM 编码保存
+   - PowerShell 才能正确解析中文字符
+   - Python 使用 `codecs.open('utf-8-sig')` 写入
+
+**工作流程：**
+
+```
+1. Python 脚本启动（在 RDP Session 中）
+    ↓
+2. 获取 Python PID (os.getpid())
+    ↓
+3. 检查 tscon_with_allow.ps1 是否存在
+    ↓
+4. 使用 PowerShell Start-Process -Verb RunAs 启动脚本
+    ↓
+5. 用户点击 UAC 提示的 "是"
+    ↓
+6. PowerShell 脚本执行：
+   - AllowSetForegroundWindow(PythonPid)  ✅ 授权
+   - query session                         ✅ 检测 Session ID
+   - tscon <session_id> /dest:console      ✅ 切换到 Console
+    ↓
+7. RDP 连接断开（预期行为）
+    ↓
+8. Python 脚本自动等待 30 秒让 Console Session 稳定
+    ↓
+9. 在新线程中调用 bring_window_to_foreground()
+    ↓
+10. SetForegroundWindow() 成功（已被授权）
+    ↓
+11. Popup 正常显示 ✅
+```
+
+**优势：**
+
+- ✅ **一键自动化**: 不需要手动 `query session` 和记住 Session ID
+- ✅ **权限自动授予**: `AllowSetForegroundWindow` 自动授权，无需手动调用 API
+- ✅ **错误处理**: 提供详细的成功/失败提示
+- ✅ **编码兼容**: 支持中文字符显示
+- ✅ **自动继续**: tscon 后脚本自动等待并继续，无需手动 input()
+
+**常见问题：**
+
+1. **Q: 为什么需要 AllowSetForegroundWindow？**
+   - A: Windows 默认不允许后台进程设置前台窗口，必须由前台进程（PowerShell）授权
+
+2. **Q: 为什么脚本需要管理员权限？**
+   - A: `tscon` 命令需要管理员权限才能切换 Session
+
+3. **Q: tscon 后为什么要等待 30 秒？**
+   - A: Console Session 切换需要时间稳定，包括 Desktop 绑定、GUI 子系统初始化等
+
+4. **Q: 如果 PowerShell 脚本不存在会怎样？**
+   - A: Python 脚本会检测并给出错误提示，提供手动执行的步骤
+
+**文件位置：**
+- PowerShell 脚本: `test_agent/test_script/tscon_with_allow.ps1`
+- Python 集成示例: `test_agent/test_script/test_cdp_attach_checkout.py`
+- Plan B 完整实现: `test_agent/test_script/test_cdp_attach_checkout_plan_b.py`
 
 ### 两台 VM 方案为什么也不行？
 

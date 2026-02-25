@@ -102,30 +102,33 @@ class UIAHelper:
                             all_text_content.append(name)
                     except:
                         continue
+                if buttons.Length < 4:
+                    print(f"--------------------------  ✗ Not enough buttons found: {buttons.Length} (expected at least 4)")
+                    return False  # Express Checkout popup通常有多个按钮，Contact info / Payment methods / Autofill / More actions等，如果按钮太少很可能不是
 
                 # 由于找到的窗口可能是Popup的子窗口，直接在该窗口内找可能找不到所有按钮（尤其是一些操作按钮），因此增加一个额外的查找：在父窗口中也查找一次按钮，补充可能遗漏的内容
                 # TODO: 如果父窗口中有autofill按，，那是不是应该返回父窗口的句柄？？
                 # 额外查找：在父窗口中查找 Autofill 按钮（Footer 层级）
-                try:
-                    tree_walker = self.uia.CreateTreeWalker(self.uia.CreateTrueCondition())
-                    parent = tree_walker.GetParentElement(window)
-                    if parent:
-                        print(f"  Searching Autofill button in parent element...")
-                        parent_buttons = parent.FindAll(UIAutomationClient.TreeScope_Descendants, button_condition)
-                        print(f"+++++++++++++++  Found {parent_buttons.Length} buttons in parent")
-                        for i in range(parent_buttons.Length):
-                            try:
-                                btn = parent_buttons.GetElement(i)
-                                name = btn.CurrentName
-                                # 只添加 Autofill/More 按钮，避免重复
-                                if name and ('Autofill' in name or 'More actions' in name):
-                                    if name.strip() not in all_text_content:
-                                        print(f"    Parent Button {i}: '{name}'")
-                                        all_text_content.append(name.strip())
-                            except:
-                                continue
-                except Exception as e:
-                    print(f"  No parent or error searching parent: {e}")
+                # try:
+                #     tree_walker = self.uia.CreateTreeWalker(self.uia.CreateTrueCondition())
+                #     parent = tree_walker.GetParentElement(window)
+                #     if parent:
+                #         print(f"  Searching Autofill button in parent element...")
+                #         parent_buttons = parent.FindAll(UIAutomationClient.TreeScope_Descendants, button_condition)
+                #         print(f"+++++++++++++++  Found {parent_buttons.Length} buttons in parent")
+                #         for i in range(parent_buttons.Length):
+                #             try:
+                #                 btn = parent_buttons.GetElement(i)
+                #                 name = btn.CurrentName
+                #                 # 只添加 Autofill/More 按钮，避免重复
+                #                 if name and ('Autofill' in name or 'More actions' in name):
+                #                     if name.strip() not in all_text_content:
+                #                         print(f"    Parent Button {i}: '{name}'")
+                #                         # all_text_content.append(name.strip())
+                #             except:
+                #                 continue
+                # except Exception as e:
+                #     print(f"  No parent or error searching parent: {e}")
 
             except Exception as e:
                 print(f"  ✗ Error getting buttons: {e}")
@@ -232,7 +235,7 @@ class UIAHelper:
                                 # 检查是否有Express Checkout特征
                                 if self._has_express_checkout_popup_features(dialog):
                                     print(f"\n{'='*60}")
-                                    print(f"✅ Found Express Checkout Popup!")
+                                    print(f"✅✅✅ Found Express Checkout Popup!")
                                     print(f"{'='*60}")
                                     
                                     # 尝试获取窗口句柄

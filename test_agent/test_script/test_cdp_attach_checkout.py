@@ -4,7 +4,7 @@
 
 测试流程：
 1. 连接到浏览器并找到 email input
-2. 自动启动 tscon 辅助脚本（PowerShell）切换到 Console Session
+2. （可选）自动启动 tscon 辅助脚本（PowerShell）切换到 Console Session
 3. 循环执行：设置焦点 → CDP 点击 → 检测 popup
 4. 每次循环间隔 10 秒
 5. 监控日志和 UIA 检测
@@ -13,6 +13,20 @@
 - 测试 RDP Session 切换到 Console Session 后的效果
 - 验证 tscon + AllowSetForegroundWindow 是否解决了 popup 显示问题
 - 使用独立的 PowerShell 脚本自动化 tscon 执行流程
+
+命令行参数：
+--enable-tscon: 启用 tscon 辅助脚本执行（默认禁用）
+--wait-time <秒>: tscon 执行后等待时间（默认 30 秒）
+
+使用示例：
+# 不执行 tscon（适用于已在 Console Session 中的场景）
+python test_cdp_attach_checkout.py
+
+# 执行 tscon 切换（适用于 RDP Session 场景）
+python test_cdp_attach_checkout.py --enable-tscon
+
+# 自定义等待时间
+python test_cdp_attach_checkout.py --enable-tscon --wait-time 45
 """
 
 import asyncio
@@ -20,6 +34,7 @@ import sys
 import os
 import time
 import re
+import argparse
 from pathlib import Path
 from typing import Optional, List, Dict
 from playwright.async_api import async_playwright
@@ -126,19 +141,6 @@ class EdgeLogMonitor:
 # ============================================================================
 # UIA 检测器
 # ============================================================================
-
-# def _get_uia_client():
-# 	"""获取 UIAutomationClient 模块"""
-# 	try:
-# 		from comtypes.gen import UIAutomationClient
-# 		return UIAutomationClient
-# 	except ImportError:
-# 		print("[UIA] 正在生成 UI Automation 类型库...")
-# 		comtypes.client.GetModule("UIAutomationCore.dll")
-# 		from comtypes.gen import UIAutomationClient
-# 		print("[UIA] 类型库生成完成")
-# 		return UIAutomationClient
-
 
 def take_screenshot(prefix: str = "screenshot") -> str | None:
 	"""
@@ -256,7 +258,7 @@ def verify_popup_dismissed(timeout: float = 2.0) -> bool:
 				return True
 
 			# 稍微等待后重试
-			time.sleep(0.1)
+			time.sleep(1)
 
 		print(f"[UIA] ⚠️  超时 ({timeout}s)，Popup 仍然可见", flush=True)
 		return False
@@ -281,7 +283,7 @@ async def click_blank_to_dismiss_popup(page, box: dict) -> bool:
 		print(f"[Dismiss] 点击空白处让 popup 消失", flush=True)
 
 		# 点击 email input box 左侧 5px 的空白位置
-		blank_x = box['x'] - 5
+		blank_x = box['x'] - 10
 		blank_y = box['y'] + box['height'] / 2  # 垂直居中
 
 		print(f"[Dismiss] 点击位置: ({blank_x:.1f}, {blank_y:.1f})", flush=True)
@@ -307,178 +309,95 @@ async def click_blank_to_dismiss_popup(page, box: dict) -> bool:
 		traceback.print_exc()
 		return False
 
-
 # ============================================================================
-# 窗口焦点管理
+# tscon 辅助脚本执行函数
 # ============================================================================
-# NOTE: 现在使用从 cdp_click.py 导入的简化版 bring_window_to_foreground()
-# 该版本只使用 SetWindowPos（不带 SWP_NOACTIVATE），在 Console Session 中足够触发 Edge 焦点检查
 
+async def execute_tscon_script(wait_time: int = 30) -> bool:
+	"""
+	执行 tscon 辅助脚本，切换到 Console Session
 
-# def bring_window_to_foreground_good() -> bool:
-# 	"""
-# 	使用 UIA + Win32 API 将浏览器窗口置于前台并设置焦点
+	Args:
+		wait_time: 等待 Console Session 稳定的时间（秒）
 
-# 	Returns:
-# 		True if success, False otherwise
-# 	"""
-# 	try:
-# 		UIAutomationClient = _get_uia_client()
-# 		uia = comtypes.client.CreateObject(
-# 			"{ff48dba4-60ef-4201-aa87-54103eef594e}",
-# 			interface=UIAutomationClient.IUIAutomation
-# 		)
-# 		root = uia.GetRootElement()
+	Returns:
+		True if successful, False otherwise
+	"""
+	try:
+		# 获取当前 Python 进程 PID
+		current_pid = os.getpid()
 
-# 		# 查找 Chrome/Edge 窗口
-# 		class_condition = uia.CreatePropertyCondition(
-# 			UIAutomationClient.UIA_ClassNamePropertyId,
-# 			"Chrome_WidgetWin_1"
-# 		)
-# 		windows = root.FindAll(
-# 			UIAutomationClient.TreeScope_Children,
-# 			class_condition
-# 		)
+		# 检查 PowerShell 脚本是否存在
+		if not TSCON_SCRIPT_PATH.exists():
+			print(f"\n❌ 错误: tscon 辅助脚本不存在: {TSCON_SCRIPT_PATH}")
+			print("   请确保 tscon_with_allow.ps1 文件在当前目录下")
+			return False
 
-# 		# 找到 Edge 浏览器窗口（通过进程名）
-# 		edge_hwnd = None
-# 		print(f"[Focus] 查找浏览器窗口，共发现 {windows.Length} 个 Chrome_WidgetWin_1 窗口:")
-# 		for i in range(windows.Length):
-# 			window = windows.GetElement(i)
-# 			try:
-# 				name = window.CurrentName
-# 				hwnd = window.CurrentNativeWindowHandle
+		# 自动启动脚本（以管理员权限）
+		print("\n" + "=" * 80)
+		print("现在将自动执行 tscon 辅助脚本")
+		print("=" * 80)
+		print("")
+		print("该脚本会自动:")
+		print(f"  ✅ 允许 Python 进程 (PID: {current_pid}) 设置前台窗口")
+		print("  ✅ 自动检测当前 RDP Session ID")
+		print("  ✅ 执行 tscon 切换到 Console Session")
+		print("  ⚠️  RDP 连接会立即断开")
+		print("")
+		print("=" * 80)
 
-# 				# Get process ID and name
-# 				try:
-# 					_, pid = win32process.GetWindowThreadProcessId(hwnd)
-# 					process = psutil.Process(pid)
-# 					process_name = process.name().lower()
+		input("\n按 Enter 启动脚本（将弹出 UAC 提示要求管理员权限）...")
 
-# 					print(f"[Focus]   窗口 {i+1}: '{name[:60]}...' (hwnd={hwnd}, pid={pid}, process={process_name})")
+		# 使用 PowerShell Start-Process 以管理员权限执行脚本
+		print("\n[执行] 正在以管理员权限启动 PowerShell 脚本...")
+		print(f"  脚本路径: {TSCON_SCRIPT_PATH.absolute()}")
+		print(f"  参数: -PythonPid {current_pid}")
 
-# 					# Check if it's Edge browser process
-# 					if process_name == 'msedge.exe':
-# 						edge_hwnd = hwnd
-# 						print(f"[Focus]   ✅ 匹配到 Edge 浏览器窗口: '{name}'")
-# 						break
-# 				except Exception as e:
-# 					# Skip windows where we can't get process info
-# 					print(f"[Focus]   窗口 {i+1}: 无法获取进程信息 ({e})")
-# 					continue
-# 			except Exception as e:
-# 				print(f"[Focus]   窗口 {i+1}: 无法读取 ({e})")
-# 				continue
+		try:
+			import subprocess
+			# 使用 Start-Process -Verb RunAs 来请求管理员权限
+			# -NoExit 参数让窗口保持打开，方便查看执行结果
+			powershell_cmd = [
+				"powershell",
+				"-Command",
+				f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs"
+			]
 
-# 		if not edge_hwnd:
-# 			print(f"[Focus] ⚠️  未找到浏览器窗口")
-# 			return False
+			subprocess.Popen(powershell_cmd)
 
-# 		# 多步骤设置焦点
-# 		try:
-# 			# 1. 如果最小化，先恢复
-# 			if win32gui.IsIconic(edge_hwnd):
-# 				print(f"[Focus] 恢复最小化窗口...")
-# 				win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
-# 				time.sleep(0.1)
+			print("[执行] ✅ 脚本已启动")
+			print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
+			print("[执行] ⚠️  脚本执行后，RDP 连接会立即断开")
+			print("")
 
-# 			# 2. 置顶（尝试带激活标志）
-# 			print(f"[Focus] 尝试 SetWindowPos 置顶并激活...")
-# 			try:
-# 				# 方法 A: 不带 SWP_NOACTIVATE（尝试激活）
-# 				win32gui.SetWindowPos(
-# 					edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-# 					win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-# 				)
-# 				print(f"[Focus] ✅ SetWindowPos 成功（带激活）")
-# 			except Exception as e:
-# 				print(f"[Focus] ⚠️  SetWindowPos 带激活失败: {e}")
-# 				# 降级：不激活
-# 				win32gui.SetWindowPos(
-# 					edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-# 					win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE
-# 				)
-# 				print(f"[Focus] ✅ SetWindowPos 成功（不激活）")
+		except Exception as e:
+			print(f"[执行] ❌ 启动脚本失败: {e}")
+			print("")
+			print("请手动执行以下步骤：")
+			print("1. 【在虚拟机里】打开管理员 PowerShell")
+			print(f"2. 执行以下命令: .\\{TSCON_SCRIPT_PATH.name} -PythonPid {current_pid}")
+			print("")
+			return False
 
-# 			# 3. 获取线程信息
-# 			foreground_hwnd = win32gui.GetForegroundWindow()
-# 			print(f"[Focus] 当前前台窗口: {foreground_hwnd}")
+		# 注意: tscon 执行后 RDP 会断开，无法手动按键
+		# 脚本将自动等待 Console Session 稳定后继续
+		print("\n⚠️  注意: tscon 执行后，RDP 连接会断开，无法手动操作")
+		print("     脚本将自动等待 Console Session 稳定后继续...")
 
-# 			if foreground_hwnd == 0:
-# 				print(f"[Focus] ⚠️  没有前台窗口，直接设置焦点")
-# 				# 没有前台窗口，直接设置
-# 				win32gui.SetForegroundWindow(edge_hwnd)
-# 				print(f"[Focus] ✅ 浏览器窗口已置于前台（方法1）")
-# 				return True
+		# 等待指定时间让 Console Session 稳定
+		print(f"\n等待 {wait_time} 秒让 Console Session 稳定...")
+		for i in range(wait_time, 0, -1):
+			print(f"  倒计时: {i} 秒", end='\r')
+			await asyncio.sleep(1)
+		print("\n")
 
-# 			# 获取线程 ID
-# 			try:
-# 				foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
-# 				current_thread = win32api.GetCurrentThreadId()
-# 				target_thread = win32process.GetWindowThreadProcessId(edge_hwnd)[0]
+		return True
 
-# 				print(f"[Focus] 线程信息:")
-# 				print(f"  - 前台窗口线程: {foreground_thread}")
-# 				print(f"  - 当前线程: {current_thread}")
-# 				print(f"  - 目标窗口线程: {target_thread}")
-
-# 				# 检查是否需要 AttachThreadInput
-# 				if foreground_thread == current_thread:
-# 					print(f"[Focus] 前台窗口已在当前线程，直接设置焦点")
-# 					win32gui.SetForegroundWindow(edge_hwnd)
-# 					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法2）")
-# 					return True
-
-# 				# 使用 AttachThreadInput
-# 				print(f"[Focus] 尝试 AttachThreadInput...")
-# 				try:
-# 					win32process.AttachThreadInput(foreground_thread, current_thread, True)
-# 					print(f"[Focus] ✅ AttachThreadInput 成功")
-
-# 					# 设置前台窗口
-# 					win32gui.SetForegroundWindow(edge_hwnd)
-
-# 					# 解除绑定
-# 					win32process.AttachThreadInput(foreground_thread, current_thread, False)
-
-# 					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法3）")
-# 					return True
-
-# 				except Exception as attach_error:
-# 					print(f"[Focus] ⚠️  AttachThreadInput 失败: {attach_error}")
-# 					print(f"[Focus] 尝试方法4: 直接 SetForegroundWindow...")
-
-# 					# 尝试直接设置（在 Console Session 可能可以）
-# 					try:
-# 						win32gui.SetForegroundWindow(edge_hwnd)
-# 						print(f"[Focus] ✅ 浏览器窗口已置于前台（方法4 - 直接设置）")
-# 						return True
-# 					except Exception as direct_error:
-# 						print(f"[Focus] ❌ 直接 SetForegroundWindow 也失败: {direct_error}")
-# 						return False
-
-# 			except Exception as thread_error:
-# 				print(f"[Focus] ⚠️  获取线程信息失败: {thread_error}")
-# 				print(f"[Focus] 尝试方法5: 强制设置焦点")
-
-# 				# 最后尝试：强制设置
-# 				try:
-# 					win32gui.SetForegroundWindow(edge_hwnd)
-# 					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法5 - 强制设置）")
-# 					return True
-# 				except Exception as force_error:
-# 					print(f"[Focus] ❌ 所有方法均失败: {force_error}")
-# 					return False
-
-# 		except Exception as e:
-# 			print(f"[Focus] ❌ 设置焦点失败: {e}")
-# 			import traceback
-# 			traceback.print_exc()
-# 			return False
-
-# 	except Exception as e:
-# 		print(f"[Focus] ❌ 失败: {e}")
-# 		return False
+	except Exception as e:
+		print(f"\n❌ 执行 tscon 脚本失败: {e}")
+		import traceback
+		traceback.print_exc()
+		return False
 
 # ============================================================================
 # CDP 点击函数
@@ -545,13 +464,32 @@ async def cdp_click_element(cdp, email_input, box):
 # ============================================================================
 
 async def main():
+	# 解析命令行参数
+	parser = argparse.ArgumentParser(description='CDP 连接 + CDP Click + UIA 检测 + 日志监控测试脚本')
+	parser.add_argument(
+		'--enable-tscon',
+		action='store_true',
+		help='启用 tscon 辅助脚本执行（切换到 Console Session）'
+	)
+	parser.add_argument(
+		'--wait-time',
+		type=int,
+		default=30,
+		help='tscon 执行后等待 Console Session 稳定的时间（秒，默认 30）'
+	)
+	args = parser.parse_args()
+
 	print("=" * 80)
 	print("CDP 连接 + 循环测试 + UIA 检测 + 日志监控 (Playwright)")
+	print("=" * 80)
+	print(f"tscon 执行: {'✅ 启用' if args.enable_tscon else '❌ 禁用（跳过）'}")
+	if args.enable_tscon:
+		print(f"等待时间: {args.wait_time} 秒")
 	print("=" * 80)
 
 	# 配置参数
 	CDP_URL = "http://localhost:9222"
-	LOOP_INTERVAL = 30  # 循环间隔（秒）
+	LOOP_INTERVAL = 5  # 循环间隔（秒）
 
 	# Email input 选择器
 	EMAIL_SELECTORS = [
@@ -650,72 +588,19 @@ async def main():
 			# 获取 CDP session
 			cdp = await context.new_cdp_session(page)
 
-			# 获取当前 Python 进程 PID
-			current_pid = os.getpid()
-
-			# 检查 PowerShell 脚本是否存在
-			if not TSCON_SCRIPT_PATH.exists():
-				print(f"\n❌ 错误: tscon 辅助脚本不存在: {TSCON_SCRIPT_PATH}")
-				print("   请确保 tscon_with_allow.ps1 文件在当前目录下")
-				return
-
-			# 自动启动脚本（以管理员权限）
-			print("\n" + "=" * 80)
-			print("现在将自动执行 tscon 辅助脚本")
-			print("=" * 80)
-			print("")
-			print("该脚本会自动:")
-			print(f"  ✅ 允许 Python 进程 (PID: {current_pid}) 设置前台窗口")
-			print("  ✅ 自动检测当前 RDP Session ID")
-			print("  ✅ 执行 tscon 切换到 Console Session")
-			print("  ⚠️  RDP 连接会立即断开")
-			print("")
-			print("=" * 80)
-
-			input("\n按 Enter 启动脚本（将弹出 UAC 提示要求管理员权限）...")
-
-			# 使用 PowerShell Start-Process 以管理员权限执行脚本
-			print("\n[执行] 正在以管理员权限启动 PowerShell 脚本...")
-			print(f"  脚本路径: {TSCON_SCRIPT_PATH.absolute()}")
-			print(f"  参数: -PythonPid {current_pid}")
-
-			try:
-				import subprocess
-				# 使用 Start-Process -Verb RunAs 来请求管理员权限
-				# -NoExit 参数让窗口保持打开，方便查看执行结果
-				powershell_cmd = [
-					"powershell",
-					"-Command",
-					f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs"
-				]
-
-				subprocess.Popen(powershell_cmd)
-
-				print("[执行] ✅ 脚本已启动")
-				print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
-				print("[执行] ⚠️  脚本执行后，RDP 连接会立即断开")
+			# ============================================================
+			# 可选步骤：执行 tscon 辅助脚本（根据 --enable-tscon 参数）
+			# ============================================================
+			if args.enable_tscon:
+				tscon_success = await execute_tscon_script(wait_time=args.wait_time)
+				if not tscon_success:
+					print("\n⚠️  tscon 脚本执行失败，但继续测试...")
+			else:
+				print("\n" + "=" * 80)
+				print("⏭️  跳过 tscon 执行（--enable-tscon 未启用）")
+				print("=" * 80)
+				print("提示：如需在 RDP Session 中测试 Popup 显示，请使用 --enable-tscon 参数")
 				print("")
-
-			except Exception as e:
-				print(f"[执行] ❌ 启动脚本失败: {e}")
-				print("")
-				print("请手动执行以下步骤：")
-				print("1. 【在虚拟机里】打开管理员 PowerShell")
-				print(f"2. 执行以下命令: .\\{TSCON_SCRIPT_PATH.name} -PythonPid {current_pid}")
-				print("")
-
-			# 注意: tscon 执行后 RDP 会断开，无法手动按键
-			# 脚本将自动等待 Console Session 稳定后继续
-			print("\n⚠️  注意: tscon 执行后，RDP 连接会断开，无法手动操作")
-			print("     脚本将自动等待 Console Session 稳定后继续...")
-
-			# 等待 30 秒让 Console Session 稳定
-			wait_time = 30
-			print(f"\n等待 {wait_time} 秒让 Console Session 稳定...")
-			for i in range(wait_time, 0, -1):
-				print(f"  倒计时: {i} 秒", end='\r')
-				await asyncio.sleep(1)
-			print("\n")
 
 			# 循环测试
 			loop_count = 0
