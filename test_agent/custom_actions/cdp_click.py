@@ -9,6 +9,13 @@ Key features:
 1. Uses UIA to find and bring browser window to foreground
 2. Executes complete CDP mouse sequence (mouseMoved → mousePressed → mouseReleased)
 3. Ensures window has focus before click (required for Edge autofill)
+4. Uses new thread to handle Desktop switching after tscon (方案 B)
+
+方案 B - 新线程处理 Desktop 切换：
+- 主线程可能绑定到旧的 RDP Desktop（tscon 之前）
+- 创建新线程来执行焦点设置，新线程会绑定到当前的 Input Desktop (Console)
+- 在新线程中重新初始化 UIA 并调用 SetForegroundWindow
+- 即使 AttachThreadInput 失败，SetForegroundWindow 也能成功
 """
 
 import asyncio
@@ -16,8 +23,10 @@ import win32gui
 import win32con
 import win32process
 import win32api
+import win32service
 import psutil
 import comtypes.client
+import threading
 from typing import Optional
 from pydantic import BaseModel, Field
 from browser_use.browser.session import BrowserSession
@@ -43,7 +52,12 @@ def _get_uia_client():
 
 def bring_window_to_foreground() -> bool:
 	"""
-	Bring browser window to foreground using UIA.
+	Bring browser window to foreground using UIA in a new thread.
+
+	This function creates a new thread to handle window focus setting.
+	The new thread will bind to the current Input Desktop (Console Desktop after tscon),
+	allowing SetForegroundWindow to succeed even if the main thread is bound to an old
+	RDP Desktop.
 
 	This is CRITICAL! Edge checks HasFocus() before showing autofill popup:
 	  if ((!rwhv || !rwhv->HasFocus()) && IsRootPopup()) {
@@ -54,105 +68,125 @@ def bring_window_to_foreground() -> bool:
 	Returns:
 		True if window was brought to foreground, False otherwise
 	"""
-	try:
-		# Initialize UI Automation
-		UIAutomationClient = _get_uia_client()
-		uia = comtypes.client.CreateObject(
-			"{ff48dba4-60ef-4201-aa87-54103eef594e}",
-			interface=UIAutomationClient.IUIAutomation
-		)
-		root = uia.GetRootElement()
+	success = [False]  # Use list to share result between threads
 
-		# Find all Chrome windows (Edge uses Chrome class)
-		class_condition = uia.CreatePropertyCondition(
-			UIAutomationClient.UIA_ClassNamePropertyId,
-			"Chrome_WidgetWin_1"
-		)
-		windows = root.FindAll(
-			UIAutomationClient.TreeScope_Children,
-			class_condition
-		)
-
-		print(f"[Focus] Found {windows.Length} Chrome-based windows")
-
-		# Find Edge window by process name
-		edge_hwnd = None
-		for i in range(windows.Length):
-			window = windows.GetElement(i)
-			try:
-				name = window.CurrentName
-				hwnd = window.CurrentNativeWindowHandle
-
-				# Get process ID and name
-				try:
-					_, pid = win32process.GetWindowThreadProcessId(hwnd)
-					process = psutil.Process(pid)
-					process_name = process.name().lower()
-
-					# Check if it's Edge browser process
-					if process_name == 'msedge.exe':
-						edge_hwnd = hwnd
-						print(f"[Focus] ✅ Found Edge browser window: {name} (hwnd={hwnd}, pid={pid})")
-						break
-				except Exception as e:
-					# Skip windows where we can't get process info
-					continue
-			except Exception as e:
-				continue
-
-		if not edge_hwnd:
-			print(f"[Focus] ⚠️  Browser window not found")
-			return False
-
-		# Multi-step aggressive focus setting
-		# Step 1: Restore if minimized
-		if win32gui.IsIconic(edge_hwnd):
-			print(f"[Focus] Restoring minimized window...")
-			win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
-
-		# Step 2: Bring to top
-		# CRITICAL: Remove SWP_NOACTIVATE flag to allow window activation
-		# In Console Session (after tscon), SetWindowPos with HWND_TOP is sufficient
-		# to make Edge's HasFocus() return true, even though GetForegroundWindow()
-		# may still return a different hwnd. This works because:
-		# 1. Console Session treats the topmost window as having "visual focus"
-		# 2. Edge's RenderWidgetHostView::HasFocus() checks window activation state,
-		#    not just the global foreground window
-		win32gui.SetWindowPos(edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-		                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)  # No SWP_NOACTIVATE!
-
-		# The following steps (AttachThreadInput + SetForegroundWindow) are NOT needed
-		# in Console Session. They will fail with ERROR_ACCESS_DENIED (error 5) after
-		# tscon, but the popup will still appear because SetWindowPos is sufficient.
-		#
-		# # Step 3: Attach to foreground thread (NOT NEEDED - fails in Console Session)
-		foreground_hwnd = win32gui.GetForegroundWindow()
-		foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
-		current_thread = win32api.GetCurrentThreadId()
-		if foreground_thread != current_thread:
-			try:
-				win32process.AttachThreadInput(foreground_thread, current_thread, True)
-				print(f"[Focus] ✅ AttachThreadInput(attach) succeeded")
-			except Exception as e:
-				print(f"[Focus] ⚠️  AttachThreadInput(attach) failed: {e}")
+	def _focus_worker():
+		"""Worker function executed in new thread to handle focus setting"""
 		try:
-			win32gui.SetForegroundWindow(edge_hwnd)
-			print(f"[Focus] ✅ SetForegroundWindow succeeded")
-		except Exception as e:
-			print(f"[Focus] ⚠️  SetForegroundWindow failed: {e}")
-		if foreground_thread != current_thread:
+			print(f"[Focus-NewThread] Thread started, ID: {threading.get_ident()}")
+
+			# Initialize UI Automation in new thread
+			# IMPORTANT: New thread binds to current Input Desktop (Console after tscon)
+			UIAutomationClient = _get_uia_client()
+			uia = comtypes.client.CreateObject(
+				"{ff48dba4-60ef-4201-aa87-54103eef594e}",
+				interface=UIAutomationClient.IUIAutomation
+			)
+			root = uia.GetRootElement()
+
+			# Find all Chrome windows (Edge uses Chrome class)
+			class_condition = uia.CreatePropertyCondition(
+				UIAutomationClient.UIA_ClassNamePropertyId,
+				"Chrome_WidgetWin_1"
+			)
+			windows = root.FindAll(
+				UIAutomationClient.TreeScope_Children,
+				class_condition
+			)
+
+			print(f"[Focus-NewThread] Found {windows.Length} Chrome-based windows")
+
+			# Find Edge window by process name
+			edge_hwnd = None
+			for i in range(windows.Length):
+				window = windows.GetElement(i)
+				try:
+					name = window.CurrentName
+					hwnd = window.CurrentNativeWindowHandle
+
+					# Get process ID and name
+					try:
+						_, pid = win32process.GetWindowThreadProcessId(hwnd)
+						process = psutil.Process(pid)
+						process_name = process.name().lower()
+
+						# Check if it's Edge browser process
+						if process_name == 'msedge.exe':
+							edge_hwnd = hwnd
+							print(f"[Focus-NewThread] ✅ Found Edge browser window: {name} (hwnd={hwnd}, pid={pid})")
+							break
+					except Exception as e:
+						# Skip windows where we can't get process info
+						continue
+				except Exception as e:
+					continue
+
+			if not edge_hwnd:
+				print(f"[Focus-NewThread] ⚠️  Browser window not found")
+				success[0] = False
+				return
+
+			# Multi-step focus setting
+			# Step 1: Restore if minimized
+			if win32gui.IsIconic(edge_hwnd):
+				print(f"[Focus-NewThread] Restoring minimized window...")
+				win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
+
+			# Step 2: Bring to top (without SWP_NOACTIVATE to allow activation)
+			print(f"[Focus-NewThread] SetWindowPos (HWND_TOP, with activation)...")
+			win32gui.SetWindowPos(edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+			                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+
+			# Step 3: Try SetForegroundWindow
+			print(f"[Focus-NewThread] Attempting SetForegroundWindow...")
+
+			foreground_hwnd = win32gui.GetForegroundWindow()
+			foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
+			current_thread = win32api.GetCurrentThreadId()
+
+			# Try AttachThreadInput (may fail with error 5, but that's OK)
+			if foreground_thread != current_thread:
+				try:
+					win32process.AttachThreadInput(foreground_thread, current_thread, True)
+					print(f"[Focus-NewThread] ✅ AttachThreadInput(attach) succeeded")
+				except Exception as e:
+					print(f"[Focus-NewThread] ⚠️  AttachThreadInput(attach) failed: {e} (expected, not critical)")
+
+			# Set foreground window (this should succeed even if AttachThreadInput failed)
 			try:
-				win32process.AttachThreadInput(foreground_thread, current_thread, False)
-				print(f"[Focus] ✅ AttachThreadInput(detach) succeeded")
+				win32gui.SetForegroundWindow(edge_hwnd)
+				print(f"[Focus-NewThread] ✅ SetForegroundWindow succeeded!")
+				success[0] = True
 			except Exception as e:
-				print(f"[Focus] ⚠️  AttachThreadInput(detach) failed: {e}")
+				print(f"[Focus-NewThread] ❌ SetForegroundWindow failed: {e}")
+				success[0] = False
 
-		print(f"[Focus] ✅ Browser window brought to foreground")
-		return True
+			# Detach thread input
+			if foreground_thread != current_thread:
+				try:
+					win32process.AttachThreadInput(foreground_thread, current_thread, False)
+					print(f"[Focus-NewThread] ✅ AttachThreadInput(detach) succeeded")
+				except Exception as e:
+					print(f"[Focus-NewThread] ⚠️  AttachThreadInput(detach) failed: {e} (not critical)")
 
-	except Exception as e:
-		print(f"[Focus] ⚠️  Failed to bring window to foreground: {e}")
+		except Exception as e:
+			print(f"[Focus-NewThread] ❌ Exception: {e}")
+			import traceback
+			traceback.print_exc()
+			success[0] = False
+
+	# Create and start worker thread
+	print(f"[Focus] Creating new thread for focus setting (main thread ID: {threading.get_ident()})...")
+	worker_thread = threading.Thread(target=_focus_worker, name="FocusWorker")
+	worker_thread.start()
+	worker_thread.join(timeout=10)  # Wait up to 10 seconds
+
+	if worker_thread.is_alive():
+		print(f"[Focus] ⚠️  Worker thread timeout")
 		return False
+
+	print(f"[Focus] Worker thread completed, result: {success[0]}")
+	return success[0]
 
 
 class CDPClickAction(BaseModel):

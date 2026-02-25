@@ -4,14 +4,15 @@
 
 测试流程：
 1. 连接到浏览器并找到 email input
-2. 等待用户执行 tscon 命令
+2. 自动启动 tscon 辅助脚本（PowerShell）切换到 Console Session
 3. 循环执行：设置焦点 → CDP 点击 → 检测 popup
 4. 每次循环间隔 10 秒
 5. 监控日志和 UIA 检测
 
 使用场景：
 - 测试 RDP Session 切换到 Console Session 后的效果
-- 验证 tscon 命令是否解决了 popup 显示问题
+- 验证 tscon + AllowSetForegroundWindow 是否解决了 popup 显示问题
+- 使用独立的 PowerShell 脚本自动化 tscon 执行流程
 """
 
 import asyncio
@@ -37,6 +38,14 @@ from uia_helper.uia_server import UIAHelper
 
 # 导入 cdp_click 中的简化版焦点设置函数
 from custom_actions.cdp_click import bring_window_to_foreground
+
+
+# ============================================================================
+# tscon 辅助脚本路径
+# ============================================================================
+
+# PowerShell 脚本路径（与当前 Python 脚本在同一目录）
+TSCON_SCRIPT_PATH = Path(__file__).parent / "tscon_with_allow.ps1"
 
 
 # ============================================================================
@@ -95,20 +104,18 @@ class EdgeLogMonitor:
 						print(f"[LogMonitor] 📝 Show: result={result} @ {timestamp}")
 
 					# 检测 Hide 日志
-					hide_match = re.search(r'\[haha\]AutofillPopupControllerImpl::Hide reason=(\w+)', line)
+					hide_match = re.search(r'\[haha\]EdgeExpressCheckoutCompositorViews::Hide called', line)
 					if hide_match:
-						reason = hide_match.group(1)
 						time_match = re.search(r'\[.*?(\d{6}\.\d{3}):', line)
 						timestamp = time_match.group(1) if time_match else 'unknown'
 
 						log_entry = {
 							'timestamp': timestamp,
-							'reason': reason,
 							'line': line.strip()
 						}
 						new_hide_logs.append(log_entry)
 						self.hide_logs.append(log_entry)
-						print(f"[LogMonitor] 📝 Hide: reason={reason} @ {timestamp}")
+						print(f"[LogMonitor] 📝 Hide: @ {timestamp}")
 
 		except Exception as e:
 			print(f"[LogMonitor] ⚠️  读取日志失败: {e}")
@@ -120,17 +127,52 @@ class EdgeLogMonitor:
 # UIA 检测器
 # ============================================================================
 
-def _get_uia_client():
-	"""获取 UIAutomationClient 模块"""
+# def _get_uia_client():
+# 	"""获取 UIAutomationClient 模块"""
+# 	try:
+# 		from comtypes.gen import UIAutomationClient
+# 		return UIAutomationClient
+# 	except ImportError:
+# 		print("[UIA] 正在生成 UI Automation 类型库...")
+# 		comtypes.client.GetModule("UIAutomationCore.dll")
+# 		from comtypes.gen import UIAutomationClient
+# 		print("[UIA] 类型库生成完成")
+# 		return UIAutomationClient
+
+
+def take_screenshot(prefix: str = "screenshot") -> str | None:
+	"""
+	截取整个屏幕并保存
+
+	Args:
+		prefix: 文件名前缀
+
+	Returns:
+		截图文件路径，失败返回 None
+	"""
 	try:
-		from comtypes.gen import UIAutomationClient
-		return UIAutomationClient
-	except ImportError:
-		print("[UIA] 正在生成 UI Automation 类型库...")
-		comtypes.client.GetModule("UIAutomationCore.dll")
-		from comtypes.gen import UIAutomationClient
-		print("[UIA] 类型库生成完成")
-		return UIAutomationClient
+		import pyautogui
+		from datetime import datetime
+		from pathlib import Path
+
+		# 创建截图目录
+		screenshot_dir = Path("screenshots")
+		screenshot_dir.mkdir(exist_ok=True)
+
+		# 生成文件名（带时间戳）
+		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+		screenshot_path = screenshot_dir / f"{prefix}_{timestamp}.png"
+
+		# 截取整个屏幕
+		screenshot = pyautogui.screenshot()
+		screenshot.save(str(screenshot_path))
+
+		print(f"[Screenshot] 📸 已保存: {screenshot_path}", flush=True)
+		return str(screenshot_path)
+
+	except Exception as e:
+		print(f"[Screenshot] ⚠️  截图失败: {e}", flush=True)
+		return None
 
 
 def detect_popup_with_uia(timeout: float = 5.0) -> bool:
@@ -167,6 +209,10 @@ def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 				print(f"[UIA]   - 选项数量: {item_count}", flush=True)
 				if items:
 					print(f"[UIA]   - 选项内容: {items[:3]}", flush=True)
+
+				# 截图保存
+				take_screenshot("popup_detected")
+
 				return True
 
 			# 稍微等待后重试
@@ -182,6 +228,86 @@ def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 		return False
 
 
+def verify_popup_dismissed(timeout: float = 2.0) -> bool:
+	"""
+	验证 Popup 是否已消失
+
+	Args:
+		timeout: 超时时间（秒）
+
+	Returns:
+		True if popup dismissed, False if still visible
+	"""
+	try:
+		print(f"[UIA] 验证 Popup 是否已消失（超时: {timeout}s）", flush=True)
+		uia_helper = UIAHelper()
+
+		start_time = time.time()
+		check_count = 0
+
+		while time.time() - start_time < timeout:
+			check_count += 1
+
+			# 调用 get_popup_state 检测 popup
+			result = uia_helper.get_popup_state()
+
+			if not result.get('success') or not result.get('visible'):
+				print(f"[UIA] ✅ Popup 已消失（检测 {check_count} 次后确认）", flush=True)
+				return True
+
+			# 稍微等待后重试
+			time.sleep(0.1)
+
+		print(f"[UIA] ⚠️  超时 ({timeout}s)，Popup 仍然可见", flush=True)
+		return False
+
+	except Exception as e:
+		print(f"[UIA] ⚠️  验证失败: {e}", flush=True)
+		return False
+
+
+async def click_blank_to_dismiss_popup(page, box: dict) -> bool:
+	"""
+	点击空白处让 popup 消失，并验证 popup 已消失
+
+	Args:
+		page: Playwright page 对象
+		box: Email input 元素的边界框信息
+
+	Returns:
+		True if popup dismissed successfully, False otherwise
+	"""
+	try:
+		print(f"[Dismiss] 点击空白处让 popup 消失", flush=True)
+
+		# 点击 email input box 左侧 5px 的空白位置
+		blank_x = box['x'] - 5
+		blank_y = box['y'] + box['height'] / 2  # 垂直居中
+
+		print(f"[Dismiss] 点击位置: ({blank_x:.1f}, {blank_y:.1f})", flush=True)
+		await page.mouse.click(blank_x, blank_y)
+		print(f"[Dismiss] ✅ 已点击空白处", flush=True)
+
+		# 等待一下让焦点转移
+		await asyncio.sleep(0.3)
+
+		# 验证 popup 是否消失
+		dismissed = verify_popup_dismissed(timeout=2.0)
+
+		if dismissed:
+			print(f"[Dismiss] ✅ Popup 已成功消失", flush=True)
+		else:
+			print(f"[Dismiss] ⚠️  Popup 未消失", flush=True)
+
+		return dismissed
+
+	except Exception as e:
+		print(f"[Dismiss] ❌ 点击空白处失败: {e}", flush=True)
+		import traceback
+		traceback.print_exc()
+		return False
+
+
 # ============================================================================
 # 窗口焦点管理
 # ============================================================================
@@ -189,170 +315,170 @@ def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 # 该版本只使用 SetWindowPos（不带 SWP_NOACTIVATE），在 Console Session 中足够触发 Edge 焦点检查
 
 
-def bring_window_to_foreground_good() -> bool:
-	"""
-	使用 UIA + Win32 API 将浏览器窗口置于前台并设置焦点
+# def bring_window_to_foreground_good() -> bool:
+# 	"""
+# 	使用 UIA + Win32 API 将浏览器窗口置于前台并设置焦点
 
-	Returns:
-		True if success, False otherwise
-	"""
-	try:
-		UIAutomationClient = _get_uia_client()
-		uia = comtypes.client.CreateObject(
-			"{ff48dba4-60ef-4201-aa87-54103eef594e}",
-			interface=UIAutomationClient.IUIAutomation
-		)
-		root = uia.GetRootElement()
+# 	Returns:
+# 		True if success, False otherwise
+# 	"""
+# 	try:
+# 		UIAutomationClient = _get_uia_client()
+# 		uia = comtypes.client.CreateObject(
+# 			"{ff48dba4-60ef-4201-aa87-54103eef594e}",
+# 			interface=UIAutomationClient.IUIAutomation
+# 		)
+# 		root = uia.GetRootElement()
 
-		# 查找 Chrome/Edge 窗口
-		class_condition = uia.CreatePropertyCondition(
-			UIAutomationClient.UIA_ClassNamePropertyId,
-			"Chrome_WidgetWin_1"
-		)
-		windows = root.FindAll(
-			UIAutomationClient.TreeScope_Children,
-			class_condition
-		)
+# 		# 查找 Chrome/Edge 窗口
+# 		class_condition = uia.CreatePropertyCondition(
+# 			UIAutomationClient.UIA_ClassNamePropertyId,
+# 			"Chrome_WidgetWin_1"
+# 		)
+# 		windows = root.FindAll(
+# 			UIAutomationClient.TreeScope_Children,
+# 			class_condition
+# 		)
 
-		# 找到 Edge 浏览器窗口（通过进程名）
-		edge_hwnd = None
-		print(f"[Focus] 查找浏览器窗口，共发现 {windows.Length} 个 Chrome_WidgetWin_1 窗口:")
-		for i in range(windows.Length):
-			window = windows.GetElement(i)
-			try:
-				name = window.CurrentName
-				hwnd = window.CurrentNativeWindowHandle
+# 		# 找到 Edge 浏览器窗口（通过进程名）
+# 		edge_hwnd = None
+# 		print(f"[Focus] 查找浏览器窗口，共发现 {windows.Length} 个 Chrome_WidgetWin_1 窗口:")
+# 		for i in range(windows.Length):
+# 			window = windows.GetElement(i)
+# 			try:
+# 				name = window.CurrentName
+# 				hwnd = window.CurrentNativeWindowHandle
 
-				# Get process ID and name
-				try:
-					_, pid = win32process.GetWindowThreadProcessId(hwnd)
-					process = psutil.Process(pid)
-					process_name = process.name().lower()
+# 				# Get process ID and name
+# 				try:
+# 					_, pid = win32process.GetWindowThreadProcessId(hwnd)
+# 					process = psutil.Process(pid)
+# 					process_name = process.name().lower()
 
-					print(f"[Focus]   窗口 {i+1}: '{name[:60]}...' (hwnd={hwnd}, pid={pid}, process={process_name})")
+# 					print(f"[Focus]   窗口 {i+1}: '{name[:60]}...' (hwnd={hwnd}, pid={pid}, process={process_name})")
 
-					# Check if it's Edge browser process
-					if process_name == 'msedge.exe':
-						edge_hwnd = hwnd
-						print(f"[Focus]   ✅ 匹配到 Edge 浏览器窗口: '{name}'")
-						break
-				except Exception as e:
-					# Skip windows where we can't get process info
-					print(f"[Focus]   窗口 {i+1}: 无法获取进程信息 ({e})")
-					continue
-			except Exception as e:
-				print(f"[Focus]   窗口 {i+1}: 无法读取 ({e})")
-				continue
+# 					# Check if it's Edge browser process
+# 					if process_name == 'msedge.exe':
+# 						edge_hwnd = hwnd
+# 						print(f"[Focus]   ✅ 匹配到 Edge 浏览器窗口: '{name}'")
+# 						break
+# 				except Exception as e:
+# 					# Skip windows where we can't get process info
+# 					print(f"[Focus]   窗口 {i+1}: 无法获取进程信息 ({e})")
+# 					continue
+# 			except Exception as e:
+# 				print(f"[Focus]   窗口 {i+1}: 无法读取 ({e})")
+# 				continue
 
-		if not edge_hwnd:
-			print(f"[Focus] ⚠️  未找到浏览器窗口")
-			return False
+# 		if not edge_hwnd:
+# 			print(f"[Focus] ⚠️  未找到浏览器窗口")
+# 			return False
 
-		# 多步骤设置焦点
-		try:
-			# 1. 如果最小化，先恢复
-			if win32gui.IsIconic(edge_hwnd):
-				print(f"[Focus] 恢复最小化窗口...")
-				win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
-				time.sleep(0.1)
+# 		# 多步骤设置焦点
+# 		try:
+# 			# 1. 如果最小化，先恢复
+# 			if win32gui.IsIconic(edge_hwnd):
+# 				print(f"[Focus] 恢复最小化窗口...")
+# 				win32gui.ShowWindow(edge_hwnd, win32con.SW_RESTORE)
+# 				time.sleep(0.1)
 
-			# 2. 置顶（尝试带激活标志）
-			print(f"[Focus] 尝试 SetWindowPos 置顶并激活...")
-			try:
-				# 方法 A: 不带 SWP_NOACTIVATE（尝试激活）
-				win32gui.SetWindowPos(
-					edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-					win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-				)
-				print(f"[Focus] ✅ SetWindowPos 成功（带激活）")
-			except Exception as e:
-				print(f"[Focus] ⚠️  SetWindowPos 带激活失败: {e}")
-				# 降级：不激活
-				win32gui.SetWindowPos(
-					edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-					win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE
-				)
-				print(f"[Focus] ✅ SetWindowPos 成功（不激活）")
+# 			# 2. 置顶（尝试带激活标志）
+# 			print(f"[Focus] 尝试 SetWindowPos 置顶并激活...")
+# 			try:
+# 				# 方法 A: 不带 SWP_NOACTIVATE（尝试激活）
+# 				win32gui.SetWindowPos(
+# 					edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+# 					win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+# 				)
+# 				print(f"[Focus] ✅ SetWindowPos 成功（带激活）")
+# 			except Exception as e:
+# 				print(f"[Focus] ⚠️  SetWindowPos 带激活失败: {e}")
+# 				# 降级：不激活
+# 				win32gui.SetWindowPos(
+# 					edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+# 					win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE
+# 				)
+# 				print(f"[Focus] ✅ SetWindowPos 成功（不激活）")
 
-			# 3. 获取线程信息
-			foreground_hwnd = win32gui.GetForegroundWindow()
-			print(f"[Focus] 当前前台窗口: {foreground_hwnd}")
+# 			# 3. 获取线程信息
+# 			foreground_hwnd = win32gui.GetForegroundWindow()
+# 			print(f"[Focus] 当前前台窗口: {foreground_hwnd}")
 
-			if foreground_hwnd == 0:
-				print(f"[Focus] ⚠️  没有前台窗口，直接设置焦点")
-				# 没有前台窗口，直接设置
-				win32gui.SetForegroundWindow(edge_hwnd)
-				print(f"[Focus] ✅ 浏览器窗口已置于前台（方法1）")
-				return True
+# 			if foreground_hwnd == 0:
+# 				print(f"[Focus] ⚠️  没有前台窗口，直接设置焦点")
+# 				# 没有前台窗口，直接设置
+# 				win32gui.SetForegroundWindow(edge_hwnd)
+# 				print(f"[Focus] ✅ 浏览器窗口已置于前台（方法1）")
+# 				return True
 
-			# 获取线程 ID
-			try:
-				foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
-				current_thread = win32api.GetCurrentThreadId()
-				target_thread = win32process.GetWindowThreadProcessId(edge_hwnd)[0]
+# 			# 获取线程 ID
+# 			try:
+# 				foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
+# 				current_thread = win32api.GetCurrentThreadId()
+# 				target_thread = win32process.GetWindowThreadProcessId(edge_hwnd)[0]
 
-				print(f"[Focus] 线程信息:")
-				print(f"  - 前台窗口线程: {foreground_thread}")
-				print(f"  - 当前线程: {current_thread}")
-				print(f"  - 目标窗口线程: {target_thread}")
+# 				print(f"[Focus] 线程信息:")
+# 				print(f"  - 前台窗口线程: {foreground_thread}")
+# 				print(f"  - 当前线程: {current_thread}")
+# 				print(f"  - 目标窗口线程: {target_thread}")
 
-				# 检查是否需要 AttachThreadInput
-				if foreground_thread == current_thread:
-					print(f"[Focus] 前台窗口已在当前线程，直接设置焦点")
-					win32gui.SetForegroundWindow(edge_hwnd)
-					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法2）")
-					return True
+# 				# 检查是否需要 AttachThreadInput
+# 				if foreground_thread == current_thread:
+# 					print(f"[Focus] 前台窗口已在当前线程，直接设置焦点")
+# 					win32gui.SetForegroundWindow(edge_hwnd)
+# 					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法2）")
+# 					return True
 
-				# 使用 AttachThreadInput
-				print(f"[Focus] 尝试 AttachThreadInput...")
-				try:
-					win32process.AttachThreadInput(foreground_thread, current_thread, True)
-					print(f"[Focus] ✅ AttachThreadInput 成功")
+# 				# 使用 AttachThreadInput
+# 				print(f"[Focus] 尝试 AttachThreadInput...")
+# 				try:
+# 					win32process.AttachThreadInput(foreground_thread, current_thread, True)
+# 					print(f"[Focus] ✅ AttachThreadInput 成功")
 
-					# 设置前台窗口
-					win32gui.SetForegroundWindow(edge_hwnd)
+# 					# 设置前台窗口
+# 					win32gui.SetForegroundWindow(edge_hwnd)
 
-					# 解除绑定
-					win32process.AttachThreadInput(foreground_thread, current_thread, False)
+# 					# 解除绑定
+# 					win32process.AttachThreadInput(foreground_thread, current_thread, False)
 
-					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法3）")
-					return True
+# 					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法3）")
+# 					return True
 
-				except Exception as attach_error:
-					print(f"[Focus] ⚠️  AttachThreadInput 失败: {attach_error}")
-					print(f"[Focus] 尝试方法4: 直接 SetForegroundWindow...")
+# 				except Exception as attach_error:
+# 					print(f"[Focus] ⚠️  AttachThreadInput 失败: {attach_error}")
+# 					print(f"[Focus] 尝试方法4: 直接 SetForegroundWindow...")
 
-					# 尝试直接设置（在 Console Session 可能可以）
-					try:
-						win32gui.SetForegroundWindow(edge_hwnd)
-						print(f"[Focus] ✅ 浏览器窗口已置于前台（方法4 - 直接设置）")
-						return True
-					except Exception as direct_error:
-						print(f"[Focus] ❌ 直接 SetForegroundWindow 也失败: {direct_error}")
-						return False
+# 					# 尝试直接设置（在 Console Session 可能可以）
+# 					try:
+# 						win32gui.SetForegroundWindow(edge_hwnd)
+# 						print(f"[Focus] ✅ 浏览器窗口已置于前台（方法4 - 直接设置）")
+# 						return True
+# 					except Exception as direct_error:
+# 						print(f"[Focus] ❌ 直接 SetForegroundWindow 也失败: {direct_error}")
+# 						return False
 
-			except Exception as thread_error:
-				print(f"[Focus] ⚠️  获取线程信息失败: {thread_error}")
-				print(f"[Focus] 尝试方法5: 强制设置焦点")
+# 			except Exception as thread_error:
+# 				print(f"[Focus] ⚠️  获取线程信息失败: {thread_error}")
+# 				print(f"[Focus] 尝试方法5: 强制设置焦点")
 
-				# 最后尝试：强制设置
-				try:
-					win32gui.SetForegroundWindow(edge_hwnd)
-					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法5 - 强制设置）")
-					return True
-				except Exception as force_error:
-					print(f"[Focus] ❌ 所有方法均失败: {force_error}")
-					return False
+# 				# 最后尝试：强制设置
+# 				try:
+# 					win32gui.SetForegroundWindow(edge_hwnd)
+# 					print(f"[Focus] ✅ 浏览器窗口已置于前台（方法5 - 强制设置）")
+# 					return True
+# 				except Exception as force_error:
+# 					print(f"[Focus] ❌ 所有方法均失败: {force_error}")
+# 					return False
 
-		except Exception as e:
-			print(f"[Focus] ❌ 设置焦点失败: {e}")
-			import traceback
-			traceback.print_exc()
-			return False
+# 		except Exception as e:
+# 			print(f"[Focus] ❌ 设置焦点失败: {e}")
+# 			import traceback
+# 			traceback.print_exc()
+# 			return False
 
-	except Exception as e:
-		print(f"[Focus] ❌ 失败: {e}")
-		return False
+# 	except Exception as e:
+# 		print(f"[Focus] ❌ 失败: {e}")
+# 		return False
 
 # ============================================================================
 # CDP 点击函数
@@ -425,7 +551,7 @@ async def main():
 
 	# 配置参数
 	CDP_URL = "http://localhost:9222"
-	LOOP_INTERVAL = 10  # 循环间隔（秒）
+	LOOP_INTERVAL = 30  # 循环间隔（秒）
 
 	# Email input 选择器
 	EMAIL_SELECTORS = [
@@ -524,23 +650,69 @@ async def main():
 			# 获取 CDP session
 			cdp = await context.new_cdp_session(page)
 
-			# 提示用户执行 tscon
+			# 获取当前 Python 进程 PID
+			current_pid = os.getpid()
+
+			# 检查 PowerShell 脚本是否存在
+			if not TSCON_SCRIPT_PATH.exists():
+				print(f"\n❌ 错误: tscon 辅助脚本不存在: {TSCON_SCRIPT_PATH}")
+				print("   请确保 tscon_with_allow.ps1 文件在当前目录下")
+				return
+
+			# 自动启动脚本（以管理员权限）
 			print("\n" + "=" * 80)
-			print("现在请执行以下步骤：")
+			print("现在将自动执行 tscon 辅助脚本")
+			print("=" * 80)
 			print("")
-			print("1. 在虚拟机里打开管理员 CMD")
-			print("2. 执行: query session")
-			print("3. 记住你的 RDP session ID")
-			print("4. 执行: tscon <session_id> /dest:console")
+			print("该脚本会自动:")
+			print(f"  ✅ 允许 Python 进程 (PID: {current_pid}) 设置前台窗口")
+			print("  ✅ 自动检测当前 RDP Session ID")
+			print("  ✅ 执行 tscon 切换到 Console Session")
+			print("  ⚠️  RDP 连接会立即断开")
 			print("")
-			print(f"执行 tscon 后，脚本会在 {LOOP_INTERVAL} 秒后开始循环测试")
 			print("=" * 80)
 
-			input("\n完成 tscon 后，按 Enter 开始循环测试...")
+			input("\n按 Enter 启动脚本（将弹出 UAC 提示要求管理员权限）...")
 
-			# 等待 LOOP_INTERVAL 秒让系统稳定
-			print(f"\n等待 {LOOP_INTERVAL} 秒让 Console Session 稳定...")
-			for i in range(LOOP_INTERVAL, 0, -1):
+			# 使用 PowerShell Start-Process 以管理员权限执行脚本
+			print("\n[执行] 正在以管理员权限启动 PowerShell 脚本...")
+			print(f"  脚本路径: {TSCON_SCRIPT_PATH.absolute()}")
+			print(f"  参数: -PythonPid {current_pid}")
+
+			try:
+				import subprocess
+				# 使用 Start-Process -Verb RunAs 来请求管理员权限
+				# -NoExit 参数让窗口保持打开，方便查看执行结果
+				powershell_cmd = [
+					"powershell",
+					"-Command",
+					f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs"
+				]
+
+				subprocess.Popen(powershell_cmd)
+
+				print("[执行] ✅ 脚本已启动")
+				print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
+				print("[执行] ⚠️  脚本执行后，RDP 连接会立即断开")
+				print("")
+
+			except Exception as e:
+				print(f"[执行] ❌ 启动脚本失败: {e}")
+				print("")
+				print("请手动执行以下步骤：")
+				print("1. 【在虚拟机里】打开管理员 PowerShell")
+				print(f"2. 执行以下命令: .\\{TSCON_SCRIPT_PATH.name} -PythonPid {current_pid}")
+				print("")
+
+			# 注意: tscon 执行后 RDP 会断开，无法手动按键
+			# 脚本将自动等待 Console Session 稳定后继续
+			print("\n⚠️  注意: tscon 执行后，RDP 连接会断开，无法手动操作")
+			print("     脚本将自动等待 Console Session 稳定后继续...")
+
+			# 等待 30 秒让 Console Session 稳定
+			wait_time = 30
+			print(f"\n等待 {wait_time} 秒让 Console Session 稳定...")
+			for i in range(wait_time, 0, -1):
 				print(f"  倒计时: {i} 秒", end='\r')
 				await asyncio.sleep(1)
 			print("\n")
@@ -563,11 +735,17 @@ async def main():
 					print(f"第 {loop_count} 次测试 @ {time.strftime('%H:%M:%S')}")
 					print(f"{'='*80}")
 
-					# Step 1: 设置窗口焦点
+					# Step 1: 设置窗口焦点（使用 run_in_executor 在线程池中执行）
 					print(f"\n[{loop_count}] Step 1: 设置浏览器窗口焦点")
+					# import concurrent.futures
+					# with concurrent.futures.ThreadPoolExecutor() as pool:
+					# 	loop_ref = asyncio.get_event_loop()
+					# 	focus_success = await loop_ref.run_in_executor(
+					# 		pool, bring_window_to_foreground
+					# 	)
+					# if not focus_success:
+					# 	print(f"[{loop_count}] ⚠️  警告: 未能设置窗口焦点")
 					focus_success = bring_window_to_foreground()
-					if not focus_success:
-						print(f"[{loop_count}] ⚠️  警告: 未能设置窗口焦点")
 
 					# 等待焦点传递完成
 					await asyncio.sleep(0.3)
@@ -609,11 +787,24 @@ async def main():
 
 					await detect_task
 
+					# Step 3.5: 点击空白处让 popup 消失并验证
+					print(f"\n[{loop_count}] Step 3.5: 点击空白处让 popup 消失")
+					popup_dismissed = await click_blank_to_dismiss_popup(page, box)
+
+					# 检查 hide 日志
+					if log_monitor:
+						await asyncio.sleep(0.2)  # 等待日志写入
+						new_logs = log_monitor.check_new_logs()
+						if new_logs['hide']:
+							log_hide_detected = True
+							print(f"[{loop_count}] ✅ 检测到 Hide 日志")
+
 					# Step 4: 总结本次结果
 					print(f"\n[{loop_count}] 本次测试结果:")
 					print(f"  - CDP 点击: {'✅' if click_success else '❌'}")
 					print(f"  - 窗口焦点: {'✅' if focus_success else '❌'}")
 					print(f"  - UIA 检测: {'✅ Popup 已显示' if popup_detected else '❌ Popup 未显示'}")
+					print(f"  - UIA 消失: {'✅ Popup 已消失' if popup_dismissed else '❌ Popup 未消失'}")
 					print(f"  - 日志 Show: {'✅' if log_show_detected else '❌'}")
 					print(f"  - 日志 Hide: {'✅' if log_hide_detected else '❌'}")
 

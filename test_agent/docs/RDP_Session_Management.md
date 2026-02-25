@@ -389,195 +389,147 @@ RenderWidgetHostViewAura::HasFocus() 返回 window_->HasFocus()
 Edge Autofill 检查 rwhv->HasFocus()
 ```
 
-### 核心问题：tscon 后窗口是否有焦点？
+### 核心问题：tscon 后的 Desktop 绑定问题
 
-**答案是：不一定！** 这取决于以下条件：
-
-#### 场景 1：tscon 后没有任何窗口获得焦点
-
-当你执行 `tscon` 切换到 Console Session 后：
+**问题：** 当脚本在 RDP Session 中启动，然后执行 tscon 切换到 Console Session 后：
 - ✅ GUI 子系统继续运行（DWM、win32k 正常）
 - ✅ `GetCursorPos` 等 API 可以正常工作
-- ❌ **但是没有窗口自动获得焦点**
+- ❌ **Python 主线程仍然绑定到旧的 RDP Desktop**
 
-这是因为：
-- Console Session 切换后，系统处于"桌面显示，但无焦点窗口"状态
-- 需要用户点击窗口或程序主动调用 `SetForegroundWindow()` 才能获得焦点
-- **此时 `rwhv->HasFocus()` 返回 false，Edge 不会显示 popup**
+**根本原因：**
+- Python 线程在创建时会绑定到当前的 Desktop (Window Station)
+- 执行 tscon 后，Input Desktop 从 RDP Desktop 切换到 Console Desktop
+- **但已存在的线程不会自动重新绑定到新 Desktop**
+- 如果线程已经创建了窗口/hooks/COM 对象，无法调用 `SetThreadDesktop()` 切换（返回 error 170 "resource in use"）
 
-#### 场景 2：CDP Click 主动设置焦点
+### 解决方案：方案 B - 使用新线程处理 Desktop 切换
 
-`cdp_click.py` 的 `bring_window_to_foreground()` 函数执行以下操作：
+**关键发现（2024 年验证）：**
+
+新创建的线程会自动绑定到当前的 Input Desktop！因此：
+
+**方案 B - 在新线程中执行焦点设置：**
 
 ```python
-# Step 1: SetWindowPos (不带 SWP_NOACTIVATE)
-win32gui.SetWindowPos(edge_hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+def bring_window_to_foreground() -> bool:
+    success = [False]
 
-# Step 2-4: 尝试调用 AttachThreadInput 和 SetForegroundWindow
-foreground_hwnd = win32gui.GetForegroundWindow()
-foreground_thread = win32process.GetWindowThreadProcessId(foreground_hwnd)[0]
-current_thread = win32api.GetCurrentThreadId()
+    def _focus_worker():
+        """工作线程 - 自动绑定到 Console Desktop"""
+        # 1. 在新线程中重新初始化 UIA
+        #    新线程创建时会绑定到当前 Input Desktop (Console)
+        uia = comtypes.client.CreateObject(...)
 
-if foreground_thread != current_thread:
-    try:
-        win32process.AttachThreadInput(foreground_thread, current_thread, True)
-    except Exception as e:
-        pass  # 在 Console Session 会失败: error 5 (Access Denied)
+        # 2. 查找 Edge 浏览器窗口
+        edge_hwnd = find_edge_window()
 
-try:
-    win32gui.SetForegroundWindow(edge_hwnd)
-except Exception as e:
-    pass  # 在 Console Session 会失败: error 5 (Access Denied)
+        # 3. SetWindowPos 置顶
+        win32gui.SetWindowPos(edge_hwnd, win32con.HWND_TOP, ...)
 
-if foreground_thread != current_thread:
-    try:
-        win32process.AttachThreadInput(foreground_thread, current_thread, False)
-    except Exception as e:
-        pass
+        # 4. 尝试 AttachThreadInput (会失败 error 5，但不影响)
+        try:
+            win32process.AttachThreadInput(...)
+        except Exception:
+            pass  # 预期失败，忽略
+
+        # 5. SetForegroundWindow (✅ 成功！)
+        try:
+            win32gui.SetForegroundWindow(edge_hwnd)
+            success[0] = True  # ✅ 成功
+        except Exception as e:
+            success[0] = False
+
+    # 创建新线程（自动绑定到 Console Desktop）
+    worker = threading.Thread(target=_focus_worker)
+    worker.start()
+    worker.join(timeout=10)
+
+    return success[0]
 ```
 
-**关键发现：即使 API 调用失败，Popup 依然能出现！**
-
-### 真正的触发机制（实测验证）
-
-经过测试验证，发现以下机制：
-
-**在 Console Session 中：**
-
-1. **SetWindowPos 不带 SWP_NOACTIVATE 是核心**
-   - ✅ 窗口被置顶（Z-order 改变）
-   - ✅ 触发窗口激活流程
-   - ✅ Windows 发送 `WM_ACTIVATE` 消息
-
-2. **AttachThreadInput 和 SetForegroundWindow 虽然失败，但必须调用**
-   - ❌ 两个 API 都返回 `ERROR_ACCESS_DENIED (5)`
-   - ✅ **但调用失败本身产生了副作用**
-   - ✅ 设置了 Windows 内核的"激活意图"标志
-   - ✅ 影响了 SetWindowPos 的行为
-
-3. **完整的调用序列缺一不可**
-   ```
-   SetWindowPos (不带 SWP_NOACTIVATE)
-       ↓
-   尝试调用 SetForegroundWindow (失败但设置激活意图标志)
-       ↓
-   SetWindowPos 检查到激活意图，放宽限制
-       ↓
-   发送 WM_ACTIVATE 消息到浏览器窗口
-       ↓
-   Chromium 更新内部焦点状态
-       ↓
-   HasFocus() 返回 true → 显示 popup
-   ```
-
-**测试证据：**
-- ✅ 保留失败的 API 调用 → Popup 出现
-- ❌ 注释掉失败的 API 调用 → Popup **不**出现
-- 结论：即使 API 失败，调用它们的"尝试"本身是必要的
-
-### 结论
-
-**tscon 本身不直接解决 Edge Autofill Popup 问题**，但它提供了必要条件：
-
-1. ✅ **使 GUI API 可用** - Console Session 允许窗口管理 API 正常工作（不返回错误 87）
-2. ✅ **允许设置"激活意图"** - 即使 API 失败（error 5），也能设置内核标志
-3. ✅ **焦点传递正常** - `WM_ACTIVATE` 消息能正常传递到 Chromium 内部
-
-**完整触发机制：**
+**测试结果（2024-02 验证）：**
 
 ```
-1. 执行 tscon 切换到 Console Session
-    ↓
-2. 调用 SetWindowPos (不带 SWP_NOACTIVATE)
-    ↓
-3. 尝试调用 SetForegroundWindow (失败但设置激活意图)
-    ↓
-4. Windows 检测到激活意图，发送 WM_ACTIVATE
-    ↓
-5. Edge HasFocus() 返回 true
-    ↓
-6. Popup 显示
+[Focus] Creating new thread for focus setting (main thread ID: 45748)...
+[Focus-NewThread] Thread started, ID: 110468  # ← 新线程
+[Focus-NewThread] Found 4 Chrome-based windows
+[Focus-NewThread] ✅ Found Edge browser window: ...
+[Focus-NewThread] SetWindowPos (HWND_TOP, with activation)...
+[Focus-NewThread] Attempting SetForegroundWindow...
+[Focus-NewThread] ⚠️  AttachThreadInput(attach) failed: (5, 'Access is denied.')  # ← 预期失败
+[Focus-NewThread] ✅ SetForegroundWindow succeeded!  # ← ✅ 成功！
+[Focus] Worker thread completed, result: True
 ```
 
-**关键点：**
-- ❌ 错误理解：**"tscon 后 SetForegroundWindow 会成功"**
-- ✅ 正确理解：**"tscon 后 SetForegroundWindow 依然失败，但失败的尝试本身产生了必要的副作用"**
+**结论：**
+- ✅ **新线程自动绑定到 Console Desktop**
+- ✅ **SetForegroundWindow 在新线程中成功**（即使 AttachThreadInput 失败）
+- ✅ **Edge 的 HasFocus() 返回 true**
+- ✅ **Autofill Popup 正常显示**
 
-**代码实现要求：**
+### 为什么 AttachThreadInput 失败但 SetForegroundWindow 成功？
+
+**AttachThreadInput 失败的原因：**
+- 前台窗口可能属于系统进程（console、explorer 等）
+- Windows 安全机制不允许附加到系统进程的输入队列
+- 即使以管理员身份运行 tscon，也会返回 error 5
+
+**SetForegroundWindow 为什么仍能成功：**
+- 在 Console Session 中，Windows 对前台窗口的限制较宽松
+- **关键：新线程绑定到正确的 Desktop**，有权限操作同 Desktop 的窗口
+- 不需要 AttachThreadInput 的帮助
+
+**实测验证：**
+- ✅ AttachThreadInput 失败 (error 5) → SetForegroundWindow 仍成功
+- ✅ SetForegroundWindow 成功 → Edge HasFocus() 返回 true
+- ✅ Popup 正常显示
+
+### 方案对比
+
+| 方案 | 脚本启动位置 | Desktop 绑定 | SetForegroundWindow | 是否需要控制台访问 |
+|------|--------------|--------------|---------------------|-------------------|
+| **方案 A** | Console Session | 主线程绑定 Console Desktop | ✅ 直接成功 | ❌ 需要物理/虚拟控制台 |
+| **方案 B** | RDP Session | 新线程绑定 Console Desktop | ✅ 新线程中成功 | ✅ 不需要 |
+
+### 推荐实现方案
+
+**完整流程（方案 B）：**
+
+```
+1. 在 RDP Session 中启动脚本
+    ↓
+2. 脚本提示用户执行 tscon
+    ↓
+3. 用户执行: tscon <session_id> /dest:console
+    （RDP 断开，但脚本继续运行）
+    ↓
+4. 脚本等待 15 秒让 Console Session 稳定
+    ↓
+5. 脚本创建新线程执行焦点设置
+    （新线程自动绑定到 Console Desktop）
+    ↓
+6. 新线程中：
+   - 重新初始化 UIA
+   - 查找浏览器窗口
+   - SetWindowPos 置顶
+   - SetForegroundWindow (✅ 成功)
+    ↓
+7. 执行 CDP 点击
+    ↓
+8. Edge HasFocus() 返回 true
+    ↓
+9. Autofill Popup 显示 ✅
+```
+
+**代码实现要点：**
+- ✅ 必须在新线程中重新初始化 UIA（不能复用主线程的 UIA 对象）
 - ✅ 必须调用 `SetWindowPos` (不带 SWP_NOACTIVATE)
-- ✅ 必须尝试调用 `SetForegroundWindow` (即使会失败)
-- ✅ 两者缺一不可
+- ✅ 尝试调用 `AttachThreadInput` (失败是预期的，忽略错误)
+- ✅ 调用 `SetForegroundWindow` (在新线程中会成功)
 
-### 为什么失败的 API 调用依然有效？
-
-#### Windows 内核的"部分执行"机制
-
-即使 API 返回错误，Windows 内核在返回错误之前已经执行了部分操作：
-
-**SetForegroundWindow 内部流程（伪代码）：**
-```c
-BOOL SetForegroundWindow(HWND hwnd) {
-    // 1. 窗口句柄验证
-    PWND pwnd = ValidateHwnd(hwnd);
-
-    // 2. ✅ 标记"激活意图"（即使后续失败，这个标记已设置）
-    pwnd->fActivationIntended = TRUE;
-    pwnd->dwLastActivationAttempt = GetTickCount();
-
-    // 3. 权限检查
-    if (!CanSetForegroundWindow(pwnd)) {
-        SetLastError(ERROR_ACCESS_DENIED);  // ❌ 返回错误 5
-        return FALSE;  // 但步骤 2 的标记已经设置！
-    }
-
-    // 4. 实际设置前台窗口（不会执行到这里）
-    xxxSetForegroundWindow(pwnd);
-    return TRUE;
-}
-```
-
-**SetWindowPos 随后检查这个标志：**
-```c
-BOOL SetWindowPos(...) {
-    if (!fNoActivate) {  // 没有 SWP_NOACTIVATE 标志
-        // 检查窗口是否有"激活意图"
-        if (pwnd->fActivationIntended &&
-            GetTickCount() - pwnd->dwLastActivationAttempt < 500) {
-            // ✅ 放宽限制，允许激活
-            SendMessage(hwnd, WM_ACTIVATE, WA_ACTIVE, 0);
-        }
-    }
-}
-```
-
-#### 时序依赖关系
-
-```
-时刻 T0: SetWindowPos(不带 SWP_NOACTIVATE)
-    → 窗口置顶，但激活受限
-
-时刻 T1: 尝试 SetForegroundWindow (失败)
-    → 设置 fActivationIntended = TRUE
-    → 记录 dwLastActivationAttempt = T1
-
-时刻 T2: SetWindowPos 内部检查
-    → 发现 fActivationIntended == TRUE
-    → 时间差 (T2 - T1) < 500ms
-    → 发送 WM_ACTIVATE 消息
-    → Edge HasFocus() 返回 true
-    → Popup 显示
-```
-
-**如果不调用失败的 API：**
-```
-时刻 T0: SetWindowPos(不带 SWP_NOACTIVATE)
-    → 窗口置顶
-    → 检查 fActivationIntended: FALSE
-    → ❌ 不发送 WM_ACTIVATE
-    → Edge HasFocus() 返回 false
-    → Popup 不显示
-```
+**参考实现：**
+- `test_agent/custom_actions/cdp_click.py` - `bring_window_to_foreground()`
+- `test_agent/test_script/test_cdp_attach_checkout_plan_b.py` - 完整测试脚本
 
 ### 两台 VM 方案为什么也不行？
 
@@ -586,26 +538,22 @@ BOOL SetWindowPos(...) {
 1. **VM A 断开 mstsc 连接后，VM B 的 RDP Session 变成 Disconnected 状态**
 2. Disconnected RDP Session 和 Minimized RDP 的限制相同：
    - Window Station 变为 inactive
-   - `AttachThreadInput` 失败
-   - `SetForegroundWindow` 无法设置焦点
-   - 窗口无法获得焦点
+   - GUI API 受限
 3. **除非在 VM B 里执行 tscon 切换到 Console Session**
 
 ### 最终方案总结
 
-| 方案 | GUI API 可用？ | 激活意图可设置？ | Popup 显示？ |
-|------|---------------|-----------------|-------------|
-| RDP 最小化 | ❌ (error 87) | ❌ | ❌ |
-| RDP 最小化 + tscon | ✅ (error 5) | ✅ | ✅ |
-| VM A → VM B + 断开 | ❌ (error 87) | ❌ | ❌ |
-| VM A → VM B + 断开 + tscon | ✅ (error 5) | ✅ | ✅ |
-| RDP 保持连接不最小化 | ✅ | ✅ | ✅ |
+| 方案 | GUI API 可用？ | 新线程 Desktop 绑定 | SetForegroundWindow | Popup 显示？ |
+|------|---------------|--------------------|--------------------|-------------|
+| RDP 最小化 | ❌ (error 87) | N/A | ❌ | ❌ |
+| RDP + tscon (主线程) | ✅ | ❌ 绑定旧 Desktop | ❌ | ❌ |
+| RDP + tscon (新线程) | ✅ | ✅ 绑定 Console Desktop | ✅ | ✅ |
+| Console Session 启动 | ✅ | ✅ 直接绑定 Console | ✅ | ✅ |
 
-**推荐方案：**
-1. 执行 `tscon <session_id> /dest:console`
-2. 调用 `SetWindowPos` (不带 SWP_NOACTIVATE)
-3. 尝试调用 `SetForegroundWindow` (忽略 error 5)
-4. 等待 300ms 让焦点传递完成
-5. 执行 CDP 点击
-
-**注意：** 即使 `SetForegroundWindow` 返回 `ERROR_ACCESS_DENIED (5)`，也**必须**调用它，因为失败的尝试会设置 Windows 内核的"激活意图"标志，这是触发 `WM_ACTIVATE` 消息的必要条件。
+**最佳实践（方案 B）：**
+1. 在 RDP Session 中启动脚本（不需要控制台访问）
+2. 脚本提示用户执行 `tscon <session_id> /dest:console`
+3. 等待 15 秒让 Console Session 稳定
+4. **在新线程中执行焦点设置和窗口操作**
+5. 新线程自动绑定到 Console Desktop
+6. `SetForegroundWindow` 成功，Popup 正常显示

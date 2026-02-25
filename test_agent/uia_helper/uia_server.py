@@ -103,6 +103,8 @@ class UIAHelper:
                     except:
                         continue
 
+                # 由于找到的窗口可能是Popup的子窗口，直接在该窗口内找可能找不到所有按钮（尤其是一些操作按钮），因此增加一个额外的查找：在父窗口中也查找一次按钮，补充可能遗漏的内容
+                # TODO: 如果父窗口中有autofill按，，那是不是应该返回父窗口的句柄？？
                 # 额外查找：在父窗口中查找 Autofill 按钮（Footer 层级）
                 try:
                     tree_walker = self.uia.CreateTreeWalker(self.uia.CreateTrueCondition())
@@ -116,7 +118,7 @@ class UIAHelper:
                                 btn = parent_buttons.GetElement(i)
                                 name = btn.CurrentName
                                 # 只添加 Autofill/More 按钮，避免重复
-                                if name and ('Autofill' in name or 'More' in name or 'actions' in name):
+                                if name and ('Autofill' in name or 'More actions' in name):
                                     if name.strip() not in all_text_content:
                                         print(f"    Parent Button {i}: '{name}'")
                                         all_text_content.append(name.strip())
