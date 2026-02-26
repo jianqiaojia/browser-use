@@ -72,8 +72,8 @@ from test_agent.custom_actions.cdp_click import bring_window_to_foreground
 # tscon 辅助脚本路径
 # ============================================================================
 
-# PowerShell 脚本路径（与当前 Python 脚本在同一目录）
-TSCON_SCRIPT_PATH = Path(__file__).parent / "tscon_with_allow.ps1"
+# PowerShell 脚本路径
+TSCON_SCRIPT_PATH = Path(__file__).parent.parent / "utils" / "tscon_helper.ps1"
 
 
 # ============================================================================
@@ -193,7 +193,7 @@ def take_screenshot(prefix: str = "screenshot") -> str | None:
 def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 	"""
 	使用 UIA 检测 Express Checkout Popup 是否出现
-	直接调用 UIAHelper.get_popup_state()
+	直接调用 UIAHelper.find_autofill_popup()
 
 	Args:
 		timeout: 超时时间（秒）
@@ -212,18 +212,23 @@ def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 			check_count += 1
 			print(f"[UIA] 检测第 {check_count} 次...", flush=True)
 
-			# 调用 get_popup_state 检测 popup
-			result = uia_helper.get_popup_state()
+			# 调用 find_autofill_popup 检测 popup
+			result = uia_helper.find_autofill_popup()
 
-			print(f"[UIA] get_popup_state 返回: success={result.get('success')}, visible={result.get('visible')}", flush=True)
+			if result is None:
+				print(f"[UIA] find_autofill_popup 返回 None", flush=True)
+				time.sleep(1)
+				continue
 
-			if result.get('success') and result.get('visible'):
-				item_count = result.get('item_count', 0)
-				items = result.get('items', [])
+			print(f"[UIA] find_autofill_popup 返回: success={result.get('success')}", flush=True)
+
+			if result.get('success'):
+				bounds = result.get('bounds', {})
+				name = result.get('name', 'Unknown')
 				print(f"[UIA] ✅ 检测到 Express Checkout Popup!", flush=True)
-				print(f"[UIA]   - 选项数量: {item_count}", flush=True)
-				if items:
-					print(f"[UIA]   - 选项内容: {items[:3]}", flush=True)
+				print(f"[UIA]   - 名称: {name}", flush=True)
+				print(f"[UIA]   - 位置: ({bounds.get('x')}, {bounds.get('y')})", flush=True)
+				print(f"[UIA]   - 大小: {bounds.get('width')}x{bounds.get('height')}", flush=True)
 
 				# 截图保存
 				take_screenshot("popup_detected")
@@ -263,10 +268,10 @@ def verify_popup_dismissed(timeout: float = 2.0) -> bool:
 		while time.time() - start_time < timeout:
 			check_count += 1
 
-			# 调用 get_popup_state 检测 popup
-			result = uia_helper.get_popup_state()
+			# 调用 find_autofill_popup 检测 popup
+			result = uia_helper.find_autofill_popup()
 
-			if not result.get('success') or not result.get('visible'):
+			if result is None or not result.get('success'):
 				print(f"[UIA] ✅ Popup 已消失（检测 {check_count} 次后确认）", flush=True)
 				return True
 
@@ -326,7 +331,7 @@ async def click_blank_to_dismiss_popup(page, box: dict) -> bool:
 # tscon 辅助脚本执行函数
 # ============================================================================
 
-async def execute_tscon_script(wait_time: int = 30) -> bool:
+async def execute_tscon_script(wait_time: int = 15) -> bool:
 	"""
 	执行 tscon 辅助脚本，切换到 Console Session
 
@@ -343,7 +348,7 @@ async def execute_tscon_script(wait_time: int = 30) -> bool:
 		# 检查 PowerShell 脚本是否存在
 		if not TSCON_SCRIPT_PATH.exists():
 			print(f"\n❌ 错误: tscon 辅助脚本不存在: {TSCON_SCRIPT_PATH}")
-			print("   请确保 tscon_with_allow.ps1 文件在当前目录下")
+			print("   请确保 tscon_helper.ps1 文件在 test_agent/utils/ 目录下")
 			return False
 
 		# 自动启动脚本（以管理员权限）
@@ -369,20 +374,24 @@ async def execute_tscon_script(wait_time: int = 30) -> bool:
 		try:
 			import subprocess
 			# 使用 Start-Process -Verb RunAs 来请求管理员权限
-			# 使用 -NoExit 保持窗口打开，方便查看输出
+			# 使用 -Wait 等待脚本执行完成
 			powershell_cmd = [
 				"powershell",
 				"-Command",
-				f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs"
+				f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs -Wait"
 			]
 
-			print("[执行] 正在启动脚本（窗口将保持打开）...")
+			print("[执行] 正在启动脚本...")
 			print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
 			print("")
 
-			subprocess.Popen(powershell_cmd)
+			# 启动脚本并等待完成
+			result = subprocess.run(powershell_cmd, capture_output=False)
 
-			print("[执行] ✅ 脚本已启动")
+			if result.returncode == 0:
+				print("[执行] ✅ 脚本执行完成")
+			else:
+				print(f"[执行] ⚠️  脚本返回码: {result.returncode}")
 			print("")
 
 		except Exception as e:
@@ -489,8 +498,8 @@ async def main():
 	parser.add_argument(
 		'--wait-time',
 		type=int,
-		default=30,
-		help='tscon 执行后等待 Console Session 稳定的时间（秒，默认 30）'
+		default=15,
+		help='tscon 执行后等待 Console Session 稳定的时间（秒，默认 15）'
 	)
 	args = parser.parse_args()
 

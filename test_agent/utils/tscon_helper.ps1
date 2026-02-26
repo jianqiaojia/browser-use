@@ -276,82 +276,83 @@ try {
 
 Write-Host ""
 
+Write-Host "[Step 2] 先不设置分辨，在azure 上安装虚拟显示器驱动IddSampleDriver(或使用NV系列 VM)后再在azure上设置console分辨率..." -ForegroundColor Cyan
 # 2. 获取当前 RDP Session 的分辨率
-Write-Host "[Step 2] 获取当前 RDP Session 的分辨率..."
-Add-Type -AssemblyName System.Windows.Forms
-$currentScreen = [System.Windows.Forms.Screen]::PrimaryScreen
-$currentWidth = $currentScreen.Bounds.Width
-$currentHeight = $currentScreen.Bounds.Height
-Write-Host "  当前分辨率: ${currentWidth}x${currentHeight}" -ForegroundColor Cyan
-Write-Log "RDP Session 分辨率: ${currentWidth}x${currentHeight}"
+# Write-Host "[Step 2] 获取当前 RDP Session 的分辨率..."
+# Add-Type -AssemblyName System.Windows.Forms
+# $currentScreen = [System.Windows.Forms.Screen]::PrimaryScreen
+# $currentWidth = $currentScreen.Bounds.Width
+# $currentHeight = $currentScreen.Bounds.Height
+# Write-Host "  当前分辨率: ${currentWidth}x${currentHeight}" -ForegroundColor Cyan
+# Write-Log "RDP Session 分辨率: ${currentWidth}x${currentHeight}"
 
-Write-Host ""
+# Write-Host ""
 
-# 3. 获取当前 RDP Session ID
-Write-Host "[Step 3] 获取当前 RDP Session ID..."
-$sessionOutput = query session
-$currentSession = $sessionOutput | Where-Object { $_ -match '>' }
+# # 3. 获取当前 RDP Session ID
+# Write-Host "[Step 3] 获取当前 RDP Session ID..."
+# $sessionOutput = query session
+# $currentSession = $sessionOutput | Where-Object { $_ -match '>' }
 
-if ($currentSession) {
-    # 解析 Session ID（格式可能是 "rdp-tcp#0" 或数字）
-    if ($currentSession -match '>\s*(\S+)\s+\S+\s+(\d+)\s+Active') {
-        $sessionName = $matches[1]
-        $sessionId = $matches[2]
-        Write-Host "  当前 RDP Session: $sessionName (ID: $sessionId)" -ForegroundColor Cyan
-        Write-Log "当前 RDP Session: $sessionName (ID: $sessionId)"
+# if ($currentSession) {
+#     # 解析 Session ID（格式可能是 "rdp-tcp#0" 或数字）
+#     if ($currentSession -match '>\s*(\S+)\s+\S+\s+(\d+)\s+Active') {
+#         $sessionName = $matches[1]
+#         $sessionId = $matches[2]
+#         Write-Host "  当前 RDP Session: $sessionName (ID: $sessionId)" -ForegroundColor Cyan
+#         Write-Log "当前 RDP Session: $sessionName (ID: $sessionId)"
 
-        Write-Host ""
-        Write-Host "[Step 4] 执行 tscon 切换到 Console Session..."
-        Write-Host "  命令: tscon $sessionId /dest:console"
-        Write-Host "  警告: RDP 连接即将断开！" -ForegroundColor Yellow
-        Write-Host "  提示: 切换后将等待 20 秒，然后自动设置分辨率为 ${currentWidth}x${currentHeight}" -ForegroundColor Cyan
-        Write-Host "  提示: 查看执行日志: $LogFile" -ForegroundColor Cyan
-        Write-Host ""
+#         Write-Host ""
+#         Write-Host "[Step 4] 执行 tscon 切换到 Console Session..."
+#         Write-Host "  命令: tscon $sessionId /dest:console"
+#         Write-Host "  警告: RDP 连接即将断开！" -ForegroundColor Yellow
+#         Write-Host "  提示: 切换后将等待 20 秒，然后自动设置分辨率为 ${currentWidth}x${currentHeight}" -ForegroundColor Cyan
+#         Write-Host "  提示: 查看执行日志: $LogFile" -ForegroundColor Cyan
+#         Write-Host ""
 
-        Start-Sleep -Seconds 2
+#         Start-Sleep -Seconds 2
 
-        Write-Log "执行 tscon $sessionId /dest:console"
+#         Write-Log "执行 tscon $sessionId /dest:console"
 
-        # 执行 tscon
-        tscon $sessionId /dest:console
+#         # 执行 tscon
+#         tscon $sessionId /dest:console
 
-        # tscon 执行后，当前 PowerShell 进程会继续在 Console Session 中运行
-        Write-Log "tscon 已执行，当前进程已在 Console Session 中"
-        Write-Host "`n[Step 5] tscon 已执行，等待 Console Session 稳定..." -ForegroundColor Cyan
+#         # tscon 执行后，当前 PowerShell 进程会继续在 Console Session 中运行
+#         Write-Log "tscon 已执行，当前进程已在 Console Session 中"
+#         Write-Host "`n[Step 5] tscon 已执行，等待 Console Session 稳定..." -ForegroundColor Cyan
 
-        # 等待 20 秒让 Console Session 稳定
-        for ($i = 20; $i -gt 0; $i--) {
-            Write-Host "  倒计时: $i 秒" -NoNewline
-            Start-Sleep -Seconds 1
-            Write-Host "`r" -NoNewline
-        }
-        Write-Host "  等待完成                    "
-        Write-Log "等待 20 秒完成"
+#         # 等待 20 秒让 Console Session 稳定
+#         for ($i = 20; $i -gt 0; $i--) {
+#             Write-Host "  倒计时: $i 秒" -NoNewline
+#             Start-Sleep -Seconds 1
+#             Write-Host "`r" -NoNewline
+#         }
+#         Write-Host "  等待完成                    "
+#         Write-Log "等待 20 秒完成"
 
-        # 直接执行分辨率设置
-        Write-Host ""
-        Write-Host "[Step 6] 设置 Console Session 分辨率..."
-        $success = Set-ConsoleResolution -TargetWidth $currentWidth -TargetHeight $currentHeight
+#         # 直接执行分辨率设置
+#         Write-Host ""
+#         Write-Host "[Step 6] 设置 Console Session 分辨率..."
+#         $success = Set-ConsoleResolution -TargetWidth $currentWidth -TargetHeight $currentHeight
 
-        if ($success) {
-            Write-Host "`n✅ 脚本执行完成！" -ForegroundColor Green
-            Write-Log "脚本执行成功"
-        } else {
-            Write-Host "`n⚠️  脚本执行完成，但分辨率设置可能失败" -ForegroundColor Yellow
-            Write-Log "脚本执行完成，但分辨率设置失败"
-        }
+#         if ($success) {
+#             Write-Host "`n✅ 脚本执行完成！" -ForegroundColor Green
+#             Write-Log "脚本执行成功"
+#         } else {
+#             Write-Host "`n⚠️  脚本执行完成，但分辨率设置可能失败" -ForegroundColor Yellow
+#             Write-Log "脚本执行完成，但分辨率设置失败"
+#         }
 
-        Write-Log "=========================================="
+#         Write-Log "=========================================="
 
-    } else {
-        Write-Host "  ❌ 无法解析 Session ID，请手动执行 tscon" -ForegroundColor Red
-        Write-Host "  当前会话信息:"
-        Write-Host $currentSession
-        Write-Log "无法解析 Session ID"
-    }
-} else {
-    Write-Host "  ❌ 未找到活动的 RDP Session" -ForegroundColor Red
-    Write-Host "  所有会话:"
-    Write-Host $sessionOutput
-    Write-Log "未找到活动的 RDP Session"
-}
+#     } else {
+#         Write-Host "  ❌ 无法解析 Session ID，请手动执行 tscon" -ForegroundColor Red
+#         Write-Host "  当前会话信息:"
+#         Write-Host $currentSession
+#         Write-Log "无法解析 Session ID"
+#     }
+# } else {
+#     Write-Host "  ❌ 未找到活动的 RDP Session" -ForegroundColor Red
+#     Write-Host "  所有会话:"
+#     Write-Host $sessionOutput
+#     Write-Log "未找到活动的 RDP Session"
+# }
