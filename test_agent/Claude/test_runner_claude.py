@@ -9,7 +9,7 @@ import json
 import sys
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -23,6 +23,7 @@ from test_agent.Claude.integration.llm_config import get_claude_sonnet
 from test_agent.config import config
 from test_agent.view import TestCase, ECTest, TestStep
 from test_agent.register_custom_actions import register_custom_actions
+from test_agent.utils.browser_focus_manager import BrowserFocusManager
 
 
 def build_task_from_steps(steps: list[TestStep]) -> str:
@@ -44,7 +45,8 @@ async def run_test_case(
 	llm: Any,
 	test: TestCase,
 	trigger_id: str,
-	run_id: int
+	run_id: int,
+	focus_manager: Optional[BrowserFocusManager] = None
 ) -> bool:
 	"""Execute a test case using Claude.
 
@@ -53,6 +55,7 @@ async def run_test_case(
 		test: Test case to execute
 		trigger_id: Identifier for the test trigger
 		run_id: Run identifier
+		focus_manager: Optional browser focus manager instance
 
 	Returns:
 		True if test passed, False otherwise
@@ -97,9 +100,27 @@ async def run_test_case(
 			use_vision=config.vision_enabled,
 		)
 
+		# Start focus manager if provided (in background thread, non-blocking)
+		if focus_manager:
+			print("[FocusManager] Starting browser focus management in background...")
+			# 在后台线程启动，不阻塞主流程
+			import concurrent.futures
+			loop = asyncio.get_event_loop()
+			focus_task = loop.run_in_executor(
+				None,  # 使用默认 ThreadPoolExecutor
+				focus_manager.start_sync  # 同步版本的 start
+			)
+			# 不等待完成，让它在后台运行
+			print("[FocusManager] Focus manager starting in background (non-blocking)...")
+
 		# Run test
 		print("[Run] Executing test...")
 		history = await agent.run(max_steps=config.max_steps)
+
+		# Stop focus manager after test completes
+		if focus_manager:
+			focus_manager.stop()
+			print("[FocusManager] Focus manager stopped")
 
 		# Save history IMMEDIATELY after test completes, before any other operations
 		safe_name = test.test_case_name.replace(" ", "_").replace("-", "_").lower()
@@ -189,7 +210,8 @@ async def run_test_file(
 	test_file: str,
 	llm: Any,
 	trigger_id: str = "manual",
-	run_id: int = 1
+	run_id: int = 1,
+	enable_focus_manager: bool = False
 ) -> bool:
 	"""Run tests from a test file.
 
@@ -198,11 +220,24 @@ async def run_test_file(
 		llm: Language model to use
 		trigger_id: Identifier for the test trigger
 		run_id: Run identifier
+		enable_focus_manager: Enable browser focus manager (TOPMOST + auto restore)
 
 	Returns:
 		True if all tests passed, False otherwise
 	"""
 	ec_test = load_test_file(test_file)
+
+	# Create focus manager if enabled
+	focus_manager = None
+	if enable_focus_manager:
+		print("\n[FocusManager] Initializing browser focus manager...")
+		focus_manager = BrowserFocusManager(
+			browser_process_name='msedge.exe',  # TODO: make configurable
+			keep_topmost=True,                  # Always on top
+			auto_restore_focus=False,           # Only set once, don't continuously restore
+			check_interval=2.0                  # Not used when auto_restore_focus=False
+		)
+		print("[FocusManager] Focus manager created (will start after browser launch)")
 
 	# Run tests
 	results = []
@@ -211,7 +246,8 @@ async def run_test_file(
 			llm,
 			test_case,
 			trigger_id,
-			run_id
+			run_id,
+			focus_manager  # Pass focus manager to test case
 		)
 
 		results.append({
@@ -279,6 +315,11 @@ async def main():
 		default=30,
 		help="Maximum proxies to scrape (default: 30)"
 	)
+	parser.add_argument(
+		"--disable-browser-focus",
+		action="store_true",
+		help="Disable browser focus management (browser won't stay TOPMOST by default)"
+	)
 
 	args = parser.parse_args()
 
@@ -319,6 +360,16 @@ async def main():
 	for tf in test_files:
 		print(f"  - {tf.relative_to(repo_root)}")
 
+	# Show focus manager status
+	enable_focus_manager = not args.disable_browser_focus  # Enabled by default
+	if enable_focus_manager:
+		print(f"\n[FocusManager] Browser focus management: ENABLED (default)")
+		print(f"  - TOPMOST: Browser will be set on top once at startup")
+		print(f"  (use --disable-browser-focus to turn off)")
+	else:
+		print(f"\n[FocusManager] Browser focus management: DISABLED")
+		print(f"  (focus management turned off by --disable-browser-focus flag)")
+
 	# Run all test files
 	all_success = True
 	for test_file in test_files:
@@ -326,7 +377,8 @@ async def main():
 			str(test_file),
 			llm,
 			args.trigger_id,
-			args.run_id
+			args.run_id,
+			enable_focus_manager=enable_focus_manager  # Enabled by default
 		)
 		if not success:
 			all_success = False
