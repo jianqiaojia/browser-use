@@ -18,7 +18,7 @@ from test_agent.view import SetSessionStorageAction
 from test_agent.config import config
 from test_agent.custom_actions.os_click import register_os_click
 from test_agent.custom_actions.cdp_click import register_cdp_click
-from test_agent.uia_helper.uia_server import UIAHelper
+from test_agent.utils.uia_helper import UIAHelper
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -315,8 +315,7 @@ def register_custom_actions(tools: Tools):
             print('🔧 Initializing log file monitor...')
             
             # Import LogFileMonitor
-            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-            from test_agent.uia_helper.log_file_monitor import LogFileMonitor
+            from test_agent.utils.log_file_monitor import LogFileMonitor
             
             # 新版：将监视器存储在 browser_session 的自定义属性中
             log_path = config.log_file_path

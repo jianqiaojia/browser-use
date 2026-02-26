@@ -7,8 +7,13 @@ import time
 import threading
 from typing import Dict, Any, Optional
 from datetime import datetime
+import sys
+import os
 
-from uia_server import UIAHelper
+# 添加项目路径以便导入
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from test_agent.utils.uia_helper import UIAHelper
 
 
 class ContinuousUIAClient:
