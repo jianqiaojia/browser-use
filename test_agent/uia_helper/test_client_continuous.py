@@ -3,47 +3,38 @@ UIA Helper 持续监控测试客户端
 用于测试在Popup失去焦点就消失的情况下持续捕获
 """
 
-import requests
-import json
 import time
 import threading
 from typing import Dict, Any, Optional
 from datetime import datetime
 
+from uia_server import UIAHelper
+
 
 class ContinuousUIAClient:
     """持续监控的UIA Helper客户端"""
-    
-    def __init__(self, base_url: str = "http://localhost:3333"):
-        self.base_url = base_url
+
+    def __init__(self):
+        self.uia_helper = UIAHelper()
         self.monitoring = False
         self.popup_detected = False
         self.last_popup_state = None
         self.monitor_thread = None
-    
+
     def get_popup_state(self) -> Dict[str, Any]:
         """获取Popup状态"""
         try:
-            response = requests.get(f"{self.base_url}/uia/get_popup_state", timeout=2)
-            response.raise_for_status()
-            return response.json()
+            return self.uia_helper.get_popup_state()
         except Exception as e:
             return {'success': False, 'error': str(e)}
-    
+
     def select_and_confirm(self, profile_index: int = 0, payment_index: int = 0) -> Dict[str, Any]:
         """选择地址/支付方式并确认"""
         try:
-            data = {
-                'profile_index': profile_index,
-                'payment_index': payment_index
-            }
-            response = requests.post(
-                f"{self.base_url}/uia/select_and_confirm",
-                json=data,
-                timeout=10
+            return self.uia_helper.select_and_confirm(
+                profile_index=profile_index,
+                payment_index=payment_index
             )
-            response.raise_for_status()
-            return response.json()
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
@@ -175,46 +166,46 @@ def test_continuous_monitoring():
     print("=" * 60)
     print("UIA Helper 持续监控测试")
     print("=" * 60)
-    
+
     client = ContinuousUIAClient()
-    
-    # 检查服务器连接
-    print("\n检查服务器连接...")
+
+    # 检查 UIA Helper 初始化
+    print("\n初始化 UIA Helper...")
     try:
-        response = requests.get(f"{client.base_url}/uia/get_popup_state", timeout=2)
-        print("✅ 服务器在线")
+        # 测试调用
+        state = client.get_popup_state()
+        print("✅ UIA Helper 初始化成功")
     except Exception as e:
-        print(f"❌ 服务器离线: {e}")
-        print("\n请先启动服务器: python uia_server.py")
+        print(f"❌ UIA Helper 初始化失败: {e}")
         return
-    
+
     print("\n" + "=" * 60)
     print("测试场景：持续监控 Popup（适合失去焦点就消失的情况）")
     print("=" * 60)
-    
+
     print("\n⏳ 请在接下来的30秒内:")
     print("  1. 打开 Edge 浏览器")
     print("  2. 访问有 Express Checkout 的页面")
     print("  3. 点击 Express Checkout 按钮")
     print("  4. 让 Popup 显示（不要让它失去焦点）")
-    
+
     input("\n按 Enter 开始监控...")
-    
+
     # 启动持续监控（30秒，每0.3秒检查一次）
     client.start_monitoring(check_interval=0.3, timeout=30)
-    
+
     # 等待监控完成
     if client.monitor_thread:
         client.monitor_thread.join()
-    
+
     # 如果检测到了Popup，尝试操作
     if client.popup_detected and client.last_popup_state:
         print("\n" + "=" * 60)
         print("检测到 Popup，准备执行操作...")
         print("=" * 60)
-        
+
         choice = input("\n是否要选择第一个选项并确认？(y/n): ").strip().lower()
-        
+
         if choice == 'y':
             print("\n执行操作...")
             # 快速获取最新状态并操作
@@ -236,38 +227,38 @@ def test_wait_and_act():
     print("=" * 60)
     print("UIA Helper 等待并立即操作测试")
     print("=" * 60)
-    
+
     client = ContinuousUIAClient()
-    
-    # 检查服务器
-    print("\n检查服务器连接...")
+
+    # 检查初始化
+    print("\n初始化 UIA Helper...")
     try:
-        requests.get(f"{client.base_url}/uia/get_popup_state", timeout=2)
-        print("✅ 服务器在线")
+        state = client.get_popup_state()
+        print("✅ UIA Helper 初始化成功")
     except Exception as e:
-        print(f"❌ 服务器离线: {e}")
+        print(f"❌ UIA Helper 初始化失败: {e}")
         return
-    
+
     print("\n" + "=" * 60)
     print("测试场景：等待 Popup 出现后立即操作")
     print("=" * 60)
-    
+
     print("\n⏳ 请准备:")
     print("  1. 确保 Edge 浏览器已打开")
     print("  2. 访问有 Express Checkout 的页面")
-    
+
     input("\n准备好后按 Enter，然后立即点击 Express Checkout 按钮...")
-    
+
     # 等待 Popup 出现（检查频率更高，反应更快）
     state = client.wait_for_popup(timeout=15, check_interval=0.2)
-    
+
     if state:
         print(f"\n检测到 Popup，包含 {state.get('item_count')} 个选项")
-        
+
         # 立即执行操作（在Popup消失前）
         print("\n⚡ 立即执行操作...")
         result = client.select_and_confirm(profile_index=0)
-        
+
         if result.get('success'):
             print("✅ 操作成功")
             if result.get('warning'):

@@ -1,14 +1,11 @@
 """
-UIA Helper Server - Python实现
+UIA Helper - Python实现
 用于通过Windows UI Automation API操作Edge浏览器的Native UI组件
 """
 
-import json
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any
 import comtypes.client
-import ctypes
 
 # 动态加载 UI Automation 类型库
 def _get_uia_client():
@@ -471,86 +468,3 @@ class UIAHelper:
             import traceback
             traceback.print_exc()
             return {'success': False, 'error': str(e)}
-
-
-class UIARequestHandler(BaseHTTPRequestHandler):
-    """HTTP请求处理器"""
-    
-    uia_helper = UIAHelper()
-    
-    def do_GET(self):
-        """处理GET请求"""
-        if self.path == '/uia/get_popup_state':
-            result = self.uia_helper.get_popup_state()
-            self.send_json_response(result)
-        else:
-            self.send_error(404, "Not Found")
-    
-    def do_POST(self):
-        """处理POST请求"""
-        if self.path == '/uia/find_popup':
-            result = self.uia_helper.find_autofill_popup()
-            self.send_json_response(result)
-
-        elif self.path == '/uia/select_and_confirm':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            request_data = json.loads(post_data.decode('utf-8'))
-
-            profile_index = request_data.get('profile_index', 0)
-            payment_index = request_data.get('payment_index', 0)
-
-            print(f"\n[HTTP] /uia/select_and_confirm - Request: profile_index={profile_index}, payment_index={payment_index}")
-            result = self.uia_helper.select_and_confirm(profile_index, payment_index)
-            print(f"[HTTP] /uia/select_and_confirm - Response: {result}")
-            self.send_json_response(result)
-            print(f"[HTTP] /uia/select_and_confirm - Response sent\n")
-        else:
-            self.send_error(404, "Not Found")
-    
-    def send_json_response(self, data: Dict[str, Any]):
-        """发送JSON响应"""
-        try:
-            response = json.dumps(data, ensure_ascii=False)
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', len(response.encode('utf-8')))
-            self.end_headers()
-            self.wfile.write(response.encode('utf-8'))
-        except (ConnectionAbortedError, BrokenPipeError) as e:
-            # 客户端断开连接，忽略错误
-            print(f"Client disconnected: {e}")
-        except Exception as e:
-            print(f"Error sending response: {e}")
-    
-    def log_message(self, format, *args):
-        """自定义日志格式"""
-        print(f"[{self.log_date_time_string()}] {format % args}")
-
-
-def main():
-    """启动UIA Helper服务器"""
-    host = 'localhost'
-    port = 3333
-    
-    server = HTTPServer((host, port), UIARequestHandler)
-    
-    print("=" * 60)
-    print(f"UIA Helper 服务器已启动")
-    print(f"监听地址: http://{host}:{port}")
-    print("=" * 60)
-    print("\n可用的API端点:")
-    print("  GET  /uia/get_popup_state        - 获取Popup状态")
-    print("  POST /uia/find_popup             - 查找Popup窗口")
-    print("  POST /uia/select_and_confirm     - 选择并确认")
-    print("\n按 Ctrl+C 停止服务器\n")
-    
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n\n服务器已停止")
-        server.shutdown()
-
-
-if __name__ == '__main__':
-    main()

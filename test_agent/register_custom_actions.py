@@ -1,7 +1,6 @@
 """Custom actions registration for browser automation - MIGRATED to browser-use v0.11.8"""
 import os
 import sys
-import requests
 import time
 import asyncio
 from pathlib import Path
@@ -19,6 +18,7 @@ from test_agent.view import SetSessionStorageAction
 from test_agent.config import config
 from test_agent.custom_actions.os_click import register_os_click
 from test_agent.custom_actions.cdp_click import register_cdp_click
+from test_agent.uia_helper.uia_server import UIAHelper
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -54,6 +54,9 @@ def register_custom_actions(tools: Tools):
 
     # Register cdp_click for CDP clicks with window focus management
     register_cdp_click(tools.registry)
+
+    # Initialize UIA Helper instance (shared across all actions)
+    uia_helper = UIAHelper()
 
     async def call_agent(
         task: str,
@@ -196,12 +199,10 @@ def register_custom_actions(tools: Tools):
         description='Get the current state of the autofill popup using UIA Helper - checks if popup is visible and returns available options',
     )
     async def uia_get_popup_state(browser_session: BrowserSession) -> ActionResult:
-        """Get the state of the autofill popup via UIA Helper API"""
+        """Get the state of the autofill popup via UIA Helper"""
         try:
-            response = requests.get('http://localhost:3333/uia/get_popup_state', timeout=5)
-            response.raise_for_status()
-            result = response.json()
-            
+            result = uia_helper.get_popup_state()
+
             if result.get('success') and result.get('visible'):
                 item_count = result.get('item_count', 0)
                 items = result.get('items', [])
@@ -231,18 +232,16 @@ def register_custom_actions(tools: Tools):
     ) -> ActionResult:
         """Wait for autofill popup to appear with continuous monitoring"""
         print(f'🔍 Waiting for autofill popup (timeout: {params.timeout}s, interval: {params.check_interval}s)...')
-        
+
         start_time = time.time()
         check_count = 0
-        
+
         while (time.time() - start_time) < params.timeout:
             check_count += 1
-            
+
             try:
-                response = requests.get('http://localhost:3333/uia/get_popup_state', timeout=2)
-                response.raise_for_status()
-                result = response.json()
-                
+                result = uia_helper.get_popup_state()
+
                 if result.get('success') and result.get('visible'):
                     elapsed = time.time() - start_time
                     item_count = result.get('item_count', 0)
@@ -255,9 +254,9 @@ def register_custom_actions(tools: Tools):
                     )
             except Exception as e:
                 print(f'Check #{check_count} failed: {str(e)}')
-            
+
             await asyncio.sleep(params.check_interval)  # 新版：使用 asyncio.sleep
-        
+
         elapsed = time.time() - start_time
         msg = f'❌ Timeout: Autofill popup not detected after {elapsed:.1f}s ({check_count} checks)'
         print(msg)
@@ -275,22 +274,15 @@ def register_custom_actions(tools: Tools):
         params: UIASelectAutofillModel,
         browser_session: BrowserSession  # 新版参数
     ) -> ActionResult:
-        """Click the autofill button via UIA Helper API to trigger autofill"""
+        """Click the autofill button via UIA Helper to trigger autofill"""
         print(f'⚡ Clicking autofill button via UIA (profile_index: {params.profile_index}, payment_index: {params.payment_index})...')
-        
+
         try:
-            data = {
-                'profile_index': params.profile_index,
-                'payment_index': params.payment_index
-            }
-            response = requests.post(
-                'http://localhost:3333/uia/select_and_confirm',
-                json=data,
-                timeout=10
+            result = uia_helper.select_and_confirm(
+                profile_index=params.profile_index,
+                payment_index=params.payment_index
             )
-            response.raise_for_status()
-            result = response.json()
-            
+
             if result.get('success'):
                 msg = f'✅ Successfully selected autofill option at index {params.profile_index}'
                 if result.get('warning'):
