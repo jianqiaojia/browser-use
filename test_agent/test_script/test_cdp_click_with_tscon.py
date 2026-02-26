@@ -59,13 +59,13 @@ except Exception:
 		pass  # DPI awareness not critical, continue anyway
 
 # 添加项目路径
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # 导入 UIA Helper
-from uia_helper.uia_server import UIAHelper
+from test_agent.utils.uia_helper import UIAHelper
 
 # 导入 cdp_click 中的简化版焦点设置函数
-from custom_actions.cdp_click import bring_window_to_foreground
+from test_agent.custom_actions.cdp_click import bring_window_to_foreground
 
 
 # ============================================================================

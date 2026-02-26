@@ -26,10 +26,11 @@ class ContinuousUIAClient:
         self.last_popup_state = None
         self.monitor_thread = None
 
-    def get_popup_state(self) -> Dict[str, Any]:
+    def find_autofill_popup(self) -> Dict[str, Any]:
         """获取Popup状态"""
         try:
-            return self.uia_helper.get_popup_state()
+            result = self.uia_helper.find_autofill_popup()
+            return result if result else {'success': False, 'error': 'find_autofill_popup returned None'}
         except Exception as e:
             return {'success': False, 'error': str(e)}
 
@@ -63,24 +64,17 @@ class ContinuousUIAClient:
             elapsed = time.time() - start_time
             
             # 获取状态
-            state = self.get_popup_state()
-            
-            if state.get('success') and state.get('visible'):
+            state = self.find_autofill_popup()
+
+            if state.get('success'):
                 # 检测到Popup
                 if not self.popup_detected:
                     self.popup_detected = True
                     print(f"\n✅ [检查 #{check_count}] 检测到 Popup! (耗时: {elapsed:.1f}秒)")
-                    print(f"   选项数量: {state.get('item_count')}")
-                    
-                    items = state.get('items', [])
-                    if items:
-                        print("   可用选项:")
-                        for i, item in enumerate(items):
-                            print(f"      {i}. {item}")
-                
+
                 # 更新最后的状态
                 self.last_popup_state = state
-                
+
                 # 显示持续检测到
                 print(f"   [{datetime.now().strftime('%H:%M:%S')}] Popup 仍然可见", end='\r')
             else:
@@ -153,13 +147,13 @@ class ContinuousUIAClient:
         print(f"\n⏳ 等待 Popup 出现（最多 {timeout} 秒）...")
         
         while (time.time() - start_time) < timeout:
-            state = self.get_popup_state()
-            
-            if state.get('success') and state.get('visible'):
+            state = self.find_autofill_popup()
+
+            if state.get('success'):
                 elapsed = time.time() - start_time
                 print(f"✅ 在 {elapsed:.1f} 秒后检测到 Popup")
                 return state
-            
+
             time.sleep(check_interval)
         
         print(f"❌ 超时：未在 {timeout} 秒内检测到 Popup")
@@ -178,7 +172,7 @@ def test_continuous_monitoring():
     print("\n初始化 UIA Helper...")
     try:
         # 测试调用
-        state = client.get_popup_state()
+        state = client.find_autofill_popup()
         print("✅ UIA Helper 初始化成功")
     except Exception as e:
         print(f"❌ UIA Helper 初始化失败: {e}")
@@ -214,8 +208,8 @@ def test_continuous_monitoring():
         if choice == 'y':
             print("\n执行操作...")
             # 快速获取最新状态并操作
-            state = client.get_popup_state()
-            if state.get('visible'):
+            state = client.find_autofill_popup()
+            if state.get('success'):
                 result = client.select_and_confirm(profile_index=0)
                 if result.get('success'):
                     print("✅ 操作成功")
@@ -238,7 +232,7 @@ def test_wait_and_act():
     # 检查初始化
     print("\n初始化 UIA Helper...")
     try:
-        state = client.get_popup_state()
+        state = client.find_autofill_popup()
         print("✅ UIA Helper 初始化成功")
     except Exception as e:
         print(f"❌ UIA Helper 初始化失败: {e}")
@@ -258,7 +252,7 @@ def test_wait_and_act():
     state = client.wait_for_popup(timeout=15, check_interval=0.2)
 
     if state:
-        print(f"\n检测到 Popup，包含 {state.get('item_count')} 个选项")
+        print(f"\n检测到 Popup")
 
         # 立即执行操作（在Popup消失前）
         print("\n⚡ 立即执行操作...")

@@ -194,34 +194,7 @@ def register_custom_actions(tools: Tools):
         except Exception as e:
             msg = f'Failed to set sessionStorage: {str(e)}'
             return ActionResult(error=msg, include_in_memory=True)
-    
-    @tools.action(
-        description='Get the current state of the autofill popup using UIA Helper - checks if popup is visible and returns available options',
-    )
-    async def uia_get_popup_state(browser_session: BrowserSession) -> ActionResult:
-        """Get the state of the autofill popup via UIA Helper"""
-        try:
-            result = uia_helper.get_popup_state()
 
-            if result.get('success') and result.get('visible'):
-                item_count = result.get('item_count', 0)
-                items = result.get('items', [])
-                msg = f'✅ Autofill popup is visible with {item_count} options: {items}'
-                return ActionResult(
-                    extracted_content=msg,
-                    include_in_memory=True,
-                )
-            else:
-                msg = '⚠️ Autofill popup is not visible'
-                return ActionResult(
-                    extracted_content=msg,
-                    include_in_memory=True,
-                    success=False
-                )
-        except Exception as e:
-            msg = f'❌ Failed to get popup state: {str(e)}'
-            return ActionResult(error=msg, include_in_memory=True, success=False)
-    
     @tools.action(
         description='Wait for the autofill popup to appear using UIA Helper - continuously checks until popup is detected or timeout',
         param_model=UIAWaitForPopupModel
@@ -240,13 +213,12 @@ def register_custom_actions(tools: Tools):
             check_count += 1
 
             try:
-                result = uia_helper.get_popup_state()
+                # 直接调用 find_autofill_popup 检测是否存在
+                result = uia_helper.find_autofill_popup()
 
-                if result.get('success') and result.get('visible'):
+                if result and result.get('success'):
                     elapsed = time.time() - start_time
-                    item_count = result.get('item_count', 0)
-                    items = result.get('items', [])
-                    msg = f'✅ Autofill popup detected after {elapsed:.1f}s ({check_count} checks). Found {item_count} options: {items}'
+                    msg = f'✅ Autofill popup detected after {elapsed:.1f}s ({check_count} checks)'
                     print(msg)
                     return ActionResult(
                         extracted_content=msg,
