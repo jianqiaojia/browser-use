@@ -1,13 +1,11 @@
 """
 OS Click Action - Calculate screen coordinates and perform OS-level mouse clicks
 
-This action calculates the screen coordinates of a DOM element and sends them
-to a helper service to perform real OS-level mouse clicks, which are
-indistinguishable from manual user clicks. This bypasses all browser-level
-detection mechanisms.
+This action calculates the screen coordinates of a DOM element and performs
+real OS-level mouse clicks using Windows API, which are indistinguishable from
+manual user clicks. This bypasses all browser-level detection mechanisms.
 """
 
-import requests
 from typing import Optional
 from pydantic import BaseModel, Field
 from browser_use.browser.session import BrowserSession
@@ -253,28 +251,34 @@ UIA Click Debug:
 '''
 		print(debug_info)
 
-		response = requests.post(
-			'http://localhost:3333/uia/click_at_position',
-			json={
-				'x': screen_x,
-				'y': screen_y
-			},
-			timeout=5
-		)
-		response.raise_for_status()
-		result = response.json()
+		# 执行 OS 级别的鼠标点击（直接使用 Windows API）
+		try:
+			import win32api
+			import win32con
+			import time
 
-		if result.get('success'):
+			# 移动鼠标到目标位置
+			win32api.SetCursorPos((screen_x, screen_y))
+			time.sleep(0.05)  # 短暂延迟，让系统处理鼠标移动
+
+			# 执行鼠标左键按下
+			win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, screen_x, screen_y, 0, 0)
+			time.sleep(0.05)
+
+			# 执行鼠标左键释放
+			win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, screen_x, screen_y, 0, 0)
+			time.sleep(0.05)
+
 			msg = f'✅ OS click executed: {tag} {attr_str} at screen ({screen_x}, {screen_y}) [viewport: ({viewport_x:.1f}, {viewport_y:.1f})]'
 
 			return ActionResult(
 				extracted_content=msg,
 				include_in_memory=True,
 			)
-		else:
-			error = result.get('error', 'Unknown error')
+
+		except Exception as click_error:
 			return ActionResult(
-				error=f'❌ OS click failed: {error}',
+				error=f'❌ OS click failed: {str(click_error)}',
 				include_in_memory=True,
 				success=False
 			)

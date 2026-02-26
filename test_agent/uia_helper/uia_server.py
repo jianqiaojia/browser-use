@@ -9,8 +9,6 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, List, Any
 import comtypes.client
 import ctypes
-import win32api
-import win32con
 
 # 动态加载 UI Automation 类型库
 def _get_uia_client():
@@ -292,80 +290,6 @@ class UIAHelper:
             import traceback
             traceback.print_exc()
             return None
-    
-    # def find_list_items(self, parent_element: Any) -> List[Any]:
-    #     """查找列表项"""
-    #     try:
-    #         print(f"[find_list_items] Searching for ListItem controls...")
-
-    #         # DEBUG: 先看看parent_element下面有什么类型的控件
-    #         print(f"[find_list_items] DEBUG: Enumerating all controls...")
-    #         try:
-    #             all_condition = self.uia.CreateTrueCondition()
-
-    #             # 1. 直接子元素
-    #             direct_children = parent_element.FindAll(
-    #                 UIAutomationClient.TreeScope_Children,
-    #                 all_condition
-    #             )
-    #             print(f"[find_list_items] DEBUG: Found {direct_children.Length} direct children")
-    #             for i in range(min(5, direct_children.Length)):
-    #                 try:
-    #                     child = direct_children.GetElement(i)
-    #                     name = child.CurrentName
-    #                     control_type = child.CurrentControlType
-    #                     print(f"[find_list_items] DEBUG:   Direct child {i}: type={control_type}, name='{name}'")
-    #                 except Exception as e:
-    #                     print(f"[find_list_items] DEBUG:   Direct child {i}: Error - {e}")
-
-    #             # 2. 所有后代元素（前20个）
-    #             all_descendants = parent_element.FindAll(
-    #                 UIAutomationClient.TreeScope_Descendants,
-    #                 all_condition
-    #             )
-    #             print(f"[find_list_items] DEBUG: Found {all_descendants.Length} total descendants")
-    #             for i in range(min(20, all_descendants.Length)):
-    #                 try:
-    #                     desc = all_descendants.GetElement(i)
-    #                     name = desc.CurrentName
-    #                     control_type = desc.CurrentControlType
-    #                     print(f"[find_list_items] DEBUG:   Descendant {i}: type={control_type}, name='{name}'")
-    #                 except Exception as e:
-    #                     print(f"[find_list_items] DEBUG:   Descendant {i}: Error - {e}")
-    #         except Exception as e:
-    #             print(f"[find_list_items] DEBUG: Failed to enumerate - {e}")
-
-    #         # 原有逻辑：查找 ListItem
-    #         condition = self.uia.CreatePropertyCondition(
-    #             UIAutomationClient.UIA_ControlTypePropertyId,
-    #             UIAutomationClient.UIA_ListItemControlTypeId
-    #         )
-
-    #         items = parent_element.FindAll(
-    #             UIAutomationClient.TreeScope_Descendants,
-    #             condition
-    #         )
-
-    #         print(f"[find_list_items] FindAll returned {items.Length} ListItem items")
-
-    #         result = []
-    #         for i in range(items.Length):
-    #             element = items.GetElement(i)
-    #             try:
-    #                 name = element.CurrentName
-    #                 control_type = element.CurrentControlType
-    #                 print(f"[find_list_items] Item {i}: name='{name}', type={control_type}")
-    #             except Exception as e:
-    #                 print(f"[find_list_items] Item {i}: Error getting info - {e}")
-    #             result.append(element)
-
-    #         print(f"[find_list_items] Returning {len(result)} list items")
-    #         return result
-    #     except Exception as e:
-    #         print(f"[find_list_items] Exception: {e}")
-    #         import traceback
-    #         traceback.print_exc()
-    #         return []
 
     def find_option_buttons(self, parent_element: Any) -> List[Any]:
         """
@@ -548,49 +472,6 @@ class UIAHelper:
             traceback.print_exc()
             return {'success': False, 'error': str(e)}
 
-    def click_at_position(self, x: int, y: int) -> Dict[str, Any]:
-        """
-        在指定屏幕坐标执行真实的鼠标点击
-
-        使用 Windows API 执行 OS 级别的鼠标点击，完全模拟真实用户操作
-
-        Args:
-            x: 屏幕 X 坐标
-            y: 屏幕 Y 坐标
-
-        Returns:
-            操作结果字典
-        """
-        try:
-            # 保存当前鼠标位置
-            # current_pos = win32api.GetCursorPos()
-
-            # 移动鼠标到目标位置
-            win32api.SetCursorPos((x, y))
-            time.sleep(0.05)  # 短暂延迟，让系统处理鼠标移动
-
-            # 执行鼠标左键按下
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, x, y, 0, 0)
-            time.sleep(0.05)
-
-            # 执行鼠标左键释放
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, x, y, 0, 0)
-            time.sleep(0.05)
-
-            # 可选：恢复鼠标位置
-            # win32api.SetCursorPos(current_pos)
-
-            return {
-                'success': True,
-                'message': f'Clicked at screen position ({x}, {y})'
-            }
-
-        except Exception as e:
-            return {
-                'success': False,
-                'error': f'Failed to click at position ({x}, {y}): {str(e)}'
-            }
-
 
 class UIARequestHandler(BaseHTTPRequestHandler):
     """HTTP请求处理器"""
@@ -624,24 +505,6 @@ class UIARequestHandler(BaseHTTPRequestHandler):
             print(f"[HTTP] /uia/select_and_confirm - Response: {result}")
             self.send_json_response(result)
             print(f"[HTTP] /uia/select_and_confirm - Response sent\n")
-
-        elif self.path == '/uia/click_at_position':
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            request_data = json.loads(post_data.decode('utf-8'))
-
-            x = request_data.get('x')
-            y = request_data.get('y')
-
-            if x is None or y is None:
-                self.send_json_response({'success': False, 'error': 'Missing x or y coordinate'})
-                return
-
-            print(f"\n[HTTP] /uia/click_at_position - Request: x={x}, y={y}")
-            result = self.uia_helper.click_at_position(x, y)
-            print(f"[HTTP] /uia/click_at_position - Response: {result}")
-            self.send_json_response(result)
-            print(f"[HTTP] /uia/click_at_position - Response sent\n")
         else:
             self.send_error(404, "Not Found")
     
@@ -680,7 +543,6 @@ def main():
     print("  GET  /uia/get_popup_state        - 获取Popup状态")
     print("  POST /uia/find_popup             - 查找Popup窗口")
     print("  POST /uia/select_and_confirm     - 选择并确认")
-    print("  POST /uia/click_at_position      - 在屏幕坐标执行真实鼠标点击")
     print("\n按 Ctrl+C 停止服务器\n")
     
     try:

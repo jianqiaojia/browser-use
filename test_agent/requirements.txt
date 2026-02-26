@@ -1,0 +1,21 @@
+# Test-Agent Requirements - 使用 browser-use 源码版本
+
+# 本地安装 browser-use（开发模式）
+-e ..
+
+# Azure AD 认证
+azure-identity>=1.21.0
+
+# Windows UI Automation
+comtypes>=1.1.14
+
+# 免费代理池依赖
+aiohttp>=3.8.0
+beautifulsoup4>=4.12.0
+brotli>=1.0.9  # 用于解码 Brotli 压缩的网页内容
+
+# 截图依赖
+pyautogui>=0.9.54
+
+# 其他依赖（browser-use 会自动安装大部分）
+pydantic>=2.0.0
