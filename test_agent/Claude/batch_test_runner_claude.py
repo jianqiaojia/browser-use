@@ -8,12 +8,56 @@ import sys
 import ctypes
 import subprocess
 from pathlib import Path
+from datetime import datetime
 
 
 # Windows API constants for preventing sleep
 ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
+
+
+class TeeLogger:
+	"""Writes to both console and file simultaneously"""
+	def __init__(self, file_path):
+		self.terminal = sys.stdout
+		self.log = open(file_path, 'w', encoding='utf-8', errors='replace')
+
+	def write(self, message):
+		# Write to terminal with error handling for unicode
+		try:
+			self.terminal.write(message)
+		except UnicodeEncodeError:
+			# Fallback: replace problematic characters
+			self.terminal.write(message.encode(self.terminal.encoding, errors='replace').decode(self.terminal.encoding))
+
+		# Write to log file (UTF-8, no issues)
+		self.log.write(message)
+		self.log.flush()  # Ensure immediate write
+
+	def flush(self):
+		self.terminal.flush()
+		self.log.flush()
+
+	def close(self):
+		self.log.close()
+
+
+def setup_logging(log_dir: Path) -> tuple[TeeLogger, Path]:
+	"""Setup log file with console output duplication.
+
+	Args:
+		log_dir: Directory to store log files
+
+	Returns:
+		Tuple of (TeeLogger instance, log file path)
+	"""
+	log_dir.mkdir(parents=True, exist_ok=True)
+	timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+	log_file = log_dir / f"batch_run_{timestamp}.log"
+
+	tee = TeeLogger(log_file)
+	return tee, log_file
 
 
 def prevent_sleep():
@@ -39,7 +83,11 @@ def allow_sleep():
 
 
 def kill_edge_processes():
-	"""Kill all Edge browser processes to ensure clean state."""
+	"""Kill all Edge browser processes to ensure clean state.
+
+	Returns:
+		True if processes were found and killed, False if no processes or error
+	"""
 	import time
 
 	try:
@@ -83,10 +131,11 @@ def kill_edge_processes():
 			else:
 				remaining = len(verify.stdout.strip().split('\n')) - 1
 				print(f"[Cleanup] ⚠️ Warning: {remaining} Edge process(es) still running")
+
+			return True  # Processes were killed
 		else:
 			print("[Cleanup] ✅ No Edge processes found")
-
-		return True
+			return False  # No processes to kill
 
 	except subprocess.TimeoutExpired:
 		print("[Cleanup] ⚠️ Timeout while checking/killing Edge processes")
@@ -100,7 +149,6 @@ def main():
 	"""Main entry point - wraps test_runner_claude.py with system-level features."""
 	import argparse
 	import time
-	from datetime import datetime
 
 	parser = argparse.ArgumentParser(
 		description="Batch test runner wrapper - prevents sleep and manages Edge processes"
@@ -110,11 +158,6 @@ def main():
 		type=int,
 		default=5,
 		help="Number of times to repeat all tests (default: 5)"
-	)
-	parser.add_argument(
-		"--cleanup-after-each",
-		action="store_true",
-		help="Kill Edge processes after each test run (default: only at end)"
 	)
 	# Pass-through args for test_runner_claude.py
 	parser.add_argument("--trigger-id", default="batch", help="Test trigger ID")
@@ -127,18 +170,31 @@ def main():
 
 	args = parser.parse_args()
 
+	# Setup logging to BOTH file AND console (using TeeLogger)
+	script_dir = Path(__file__).parent
+	log_dir = script_dir.parent.parent / 'test_agent' / 'Claude' / 'test_case_log'
+	tee, log_file = setup_logging(log_dir)
+
+	# Redirect stdout/stderr - TeeLogger will write to BOTH console AND file
+	original_stdout = sys.stdout
+	original_stderr = sys.stderr
+	sys.stdout = tee
+	sys.stderr = tee
+
+	print(f"[Log] Batch run log saved to: {log_file}")
+	print("[Log] All console output will be duplicated to log file")
+
 	# Prevent system sleep during batch testing
 	print("\n[Init] Preventing system sleep during batch testing...")
 	prevent_sleep()
 
 	try:
 		# Build command to run test_runner_claude.py
-		script_dir = Path(__file__).parent
 		test_runner_script = script_dir / "test_runner_claude.py"
 
 		if not test_runner_script.exists():
 			print(f"[FAIL] test_runner_claude.py not found at {test_runner_script}")
-			sys.exit(1)
+			return 1
 
 		# Build base command with all arguments (NO --repeat)
 		cmd = [
@@ -174,8 +230,38 @@ def main():
 			print(f"Start time: {run_start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
 			print(f"{'='*60}\n")
 
-			# Run test_runner_claude.py
-			result = subprocess.run(cmd, cwd=script_dir.parent.parent)
+			# Kill all Edge processes BEFORE starting agent (ensures clean state)
+			print(f"[Cleanup] Killing Edge processes before run {run_num}...")
+			processes_killed = kill_edge_processes()
+
+			# Only wait if processes were actually killed
+			if processes_killed:
+				print(f"[Wait] Waiting 2 seconds for cleanup to complete...")
+				time.sleep(2)
+
+			# Run test_runner_claude.py with real-time output streaming
+			print(f"[Batch] Starting test_runner_claude.py...\n")
+			sys.stdout.flush()  # Ensure header is written before subprocess output
+
+			# Use Popen to stream output in real-time
+			process = subprocess.Popen(
+				cmd,
+				cwd=script_dir.parent.parent,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.STDOUT,  # Merge stderr into stdout
+				text=True,
+				encoding='utf-8',  # Use UTF-8 for subprocess output
+				bufsize=1  # Line buffered
+			)
+
+			# Stream output line by line (will go through TeeLogger)
+			if process.stdout:
+				for line in process.stdout:
+					print(line, end='')  # Print without adding extra newline
+
+			# Wait for process to complete
+			returncode = process.wait()
+			result = subprocess.CompletedProcess(cmd, returncode)
 
 			# Track result
 			run_success = (result.returncode == 0)
@@ -189,13 +275,6 @@ def main():
 			print(f"\n[Run {run_num}] Completed in {run_duration:.1f} seconds")
 			print(f"  End time: {run_end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
 			print(f"  Status: {'✅ PASSED' if run_success else '❌ FAILED'}")
-
-			# Cleanup Edge processes after each run if requested
-			if args.cleanup_after_each and run_num < repeat_count:
-				print(f"\n[Cleanup] Killing Edge processes between runs...")
-				kill_edge_processes()
-				print(f"[Wait] Waiting 2 seconds before next run...")
-				time.sleep(2)
 
 		# Overall summary
 		print(f"\n{'='*60}")
@@ -229,6 +308,12 @@ def main():
 	finally:
 		# Always re-enable sleep when done
 		allow_sleep()
+
+		# Restore original stdout/stderr and close log file
+		sys.stdout = original_stdout
+		sys.stderr = original_stderr
+		tee.close()
+		print(f"\n[Log] Batch run log saved to: {log_file}", file=original_stdout)
 
 
 if __name__ == "__main__":

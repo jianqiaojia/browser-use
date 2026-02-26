@@ -11,6 +11,12 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+# Fix UTF-8 encoding for stdout/stderr on Windows BEFORE imports
+# This ensures all print() and logging output uses UTF-8 (including emoji)
+if sys.platform == 'win32' and hasattr(sys.stdout, 'reconfigure'):
+	sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace')
+	sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
