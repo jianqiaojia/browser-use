@@ -36,6 +36,7 @@ import win32gui
 import win32con
 import win32process
 import psutil
+import comtypes
 import comtypes.client
 from typing import Optional
 
@@ -104,8 +105,8 @@ class BrowserFocusManager:
 
 		# 同步等待浏览器窗口出现（带重试）
 		print(f"[FocusManager] Waiting for browser window to appear...")
-		max_retries = 3
-		retry_interval = 2
+		max_retries = 5
+		retry_interval = 3
 
 		for attempt in range(1, max_retries + 1):
 			self._browser_hwnd = self._find_browser_window()
@@ -201,6 +202,14 @@ class BrowserFocusManager:
 			窗口句柄 (hwnd)，如果未找到则返回 None
 		"""
 		try:
+			# Initialize COM for this thread
+			import comtypes
+			try:
+				comtypes.CoInitialize()
+			except OSError:
+				# Already initialized, ignore
+				pass
+
 			UIAutomationClient = _get_uia_client()
 			uia = comtypes.client.CreateObject(
 				"{ff48dba4-60ef-4201-aa87-54103eef594e}",
