@@ -35,6 +35,7 @@ import os
 import time
 import re
 import argparse
+import ctypes
 from pathlib import Path
 from typing import Optional, List, Dict
 from playwright.async_api import async_playwright
@@ -44,6 +45,18 @@ import win32process
 import win32api
 import psutil
 import comtypes.client
+
+# Make process DPI-aware so screenshots capture at true resolution
+try:
+	ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+	print("[DPI] ✅ Process set to DPI-aware mode")
+except Exception:
+	try:
+		ctypes.windll.user32.SetProcessDPIAware()  # Fallback for older Windows
+		print("[DPI] ✅ Process set to DPI-aware mode (fallback)")
+	except Exception:
+		print("[DPI] ⚠️  Could not set DPI awareness")
+		pass  # DPI awareness not critical, continue anyway
 
 # 添加项目路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -218,7 +231,7 @@ def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 				return True
 
 			# 稍微等待后重试
-			time.sleep(0.1)
+			time.sleep(1)
 
 		print(f"[UIA] ⏱️  超时 ({timeout}s)，未检测到 Popup（共检测 {check_count} 次）", flush=True)
 		return False
@@ -283,7 +296,7 @@ async def click_blank_to_dismiss_popup(page, box: dict) -> bool:
 		print(f"[Dismiss] 点击空白处让 popup 消失", flush=True)
 
 		# 点击 email input box 左侧 5px 的空白位置
-		blank_x = box['x'] - 10
+		blank_x = box['x'] - 5  # 左侧空白位置
 		blank_y = box['y'] + box['height'] / 2  # 垂直居中
 
 		print(f"[Dismiss] 点击位置: ({blank_x:.1f}, {blank_y:.1f})", flush=True)
@@ -356,18 +369,20 @@ async def execute_tscon_script(wait_time: int = 30) -> bool:
 		try:
 			import subprocess
 			# 使用 Start-Process -Verb RunAs 来请求管理员权限
-			# -NoExit 参数让窗口保持打开，方便查看执行结果
+			# 使用 -NoExit 保持窗口打开，方便查看输出
 			powershell_cmd = [
 				"powershell",
 				"-Command",
 				f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -NoExit -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs"
 			]
 
+			print("[执行] 正在启动脚本（窗口将保持打开）...")
+			print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
+			print("")
+
 			subprocess.Popen(powershell_cmd)
 
 			print("[执行] ✅ 脚本已启动")
-			print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
-			print("[执行] ⚠️  脚本执行后，RDP 连接会立即断开")
 			print("")
 
 		except Exception as e:
@@ -489,7 +504,7 @@ async def main():
 
 	# 配置参数
 	CDP_URL = "http://localhost:9222"
-	LOOP_INTERVAL = 5  # 循环间隔（秒）
+	LOOP_INTERVAL = 30  # 循环间隔（秒）
 
 	# Email input 选择器
 	EMAIL_SELECTORS = [
