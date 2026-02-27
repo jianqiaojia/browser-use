@@ -67,13 +67,11 @@ from test_agent.utils.uia_helper import UIAHelper
 # 导入 cdp_click 中的简化版焦点设置函数
 from test_agent.custom_actions.cdp_click import bring_window_to_foreground
 
+# 导入 tscon helper
+from test_agent.utils.tscon_helper import execute_tscon_script
 
-# ============================================================================
-# tscon 辅助脚本路径
-# ============================================================================
-
-# PowerShell 脚本路径
-TSCON_SCRIPT_PATH = Path(__file__).parent.parent / "utils" / "tscon_helper.ps1"
+# 导入 screenshot helper
+from test_agent.utils.screenshot_helper import take_screenshot
 
 
 # ============================================================================
@@ -154,41 +152,6 @@ class EdgeLogMonitor:
 # ============================================================================
 # UIA 检测器
 # ============================================================================
-
-def take_screenshot(prefix: str = "screenshot") -> str | None:
-	"""
-	截取整个屏幕并保存
-
-	Args:
-		prefix: 文件名前缀
-
-	Returns:
-		截图文件路径，失败返回 None
-	"""
-	try:
-		import pyautogui
-		from datetime import datetime
-		from pathlib import Path
-
-		# 创建截图目录
-		screenshot_dir = Path("screenshots")
-		screenshot_dir.mkdir(exist_ok=True)
-
-		# 生成文件名（带时间戳）
-		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-		screenshot_path = screenshot_dir / f"{prefix}_{timestamp}.png"
-
-		# 截取整个屏幕
-		screenshot = pyautogui.screenshot()
-		screenshot.save(str(screenshot_path))
-
-		print(f"[Screenshot] 📸 已保存: {screenshot_path}", flush=True)
-		return str(screenshot_path)
-
-	except Exception as e:
-		print(f"[Screenshot] ⚠️  截图失败: {e}", flush=True)
-		return None
-
 
 def detect_popup_with_uia(timeout: float = 5.0) -> bool:
 	"""
@@ -323,102 +286,6 @@ async def click_blank_to_dismiss_popup(page, box: dict) -> bool:
 
 	except Exception as e:
 		print(f"[Dismiss] ❌ 点击空白处失败: {e}", flush=True)
-		import traceback
-		traceback.print_exc()
-		return False
-
-# ============================================================================
-# tscon 辅助脚本执行函数
-# ============================================================================
-
-async def execute_tscon_script(wait_time: int = 15) -> bool:
-	"""
-	执行 tscon 辅助脚本，切换到 Console Session
-
-	Args:
-		wait_time: 等待 Console Session 稳定的时间（秒）
-
-	Returns:
-		True if successful, False otherwise
-	"""
-	try:
-		# 获取当前 Python 进程 PID
-		current_pid = os.getpid()
-
-		# 检查 PowerShell 脚本是否存在
-		if not TSCON_SCRIPT_PATH.exists():
-			print(f"\n❌ 错误: tscon 辅助脚本不存在: {TSCON_SCRIPT_PATH}")
-			print("   请确保 tscon_helper.ps1 文件在 test_agent/utils/ 目录下")
-			return False
-
-		# 自动启动脚本（以管理员权限）
-		print("\n" + "=" * 80)
-		print("现在将自动执行 tscon 辅助脚本")
-		print("=" * 80)
-		print("")
-		print("该脚本会自动:")
-		print(f"  ✅ 允许 Python 进程 (PID: {current_pid}) 设置前台窗口")
-		print("  ✅ 自动检测当前 RDP Session ID")
-		print("  ✅ 执行 tscon 切换到 Console Session")
-		print("  ⚠️  RDP 连接会立即断开")
-		print("")
-		print("=" * 80)
-
-		input("\n按 Enter 启动脚本（将弹出 UAC 提示要求管理员权限）...")
-
-		# 使用 PowerShell Start-Process 以管理员权限执行脚本
-		print("\n[执行] 正在以管理员权限启动 PowerShell 脚本...")
-		print(f"  脚本路径: {TSCON_SCRIPT_PATH.absolute()}")
-		print(f"  参数: -PythonPid {current_pid}")
-
-		try:
-			import subprocess
-			# 使用 Start-Process -Verb RunAs 来请求管理员权限
-			# 使用 -Wait 等待脚本执行完成
-			powershell_cmd = [
-				"powershell",
-				"-Command",
-				f"Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"{TSCON_SCRIPT_PATH.absolute()}\" -PythonPid {current_pid}' -Verb RunAs -Wait"
-			]
-
-			print("[执行] 正在启动脚本...")
-			print("[执行] ⚠️  请在弹出的 UAC 窗口中点击 '是' 来授予管理员权限")
-			print("")
-
-			# 启动脚本并等待完成
-			result = subprocess.run(powershell_cmd, capture_output=False)
-
-			if result.returncode == 0:
-				print("[执行] ✅ 脚本执行完成")
-			else:
-				print(f"[执行] ⚠️  脚本返回码: {result.returncode}")
-			print("")
-
-		except Exception as e:
-			print(f"[执行] ❌ 启动脚本失败: {e}")
-			print("")
-			print("请手动执行以下步骤：")
-			print("1. 【在虚拟机里】打开管理员 PowerShell")
-			print(f"2. 执行以下命令: .\\{TSCON_SCRIPT_PATH.name} -PythonPid {current_pid}")
-			print("")
-			return False
-
-		# 注意: tscon 执行后 RDP 会断开，无法手动按键
-		# 脚本将自动等待 Console Session 稳定后继续
-		print("\n⚠️  注意: tscon 执行后，RDP 连接会断开，无法手动操作")
-		print("     脚本将自动等待 Console Session 稳定后继续...")
-
-		# 等待指定时间让 Console Session 稳定
-		print(f"\n等待 {wait_time} 秒让 Console Session 稳定...")
-		for i in range(wait_time, 0, -1):
-			print(f"  倒计时: {i} 秒", end='\r')
-			await asyncio.sleep(1)
-		print("\n")
-
-		return True
-
-	except Exception as e:
-		print(f"\n❌ 执行 tscon 脚本失败: {e}")
 		import traceback
 		traceback.print_exc()
 		return False

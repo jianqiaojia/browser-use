@@ -3,146 +3,20 @@ Batch test runner wrapper for Claude tests.
 
 Simplified wrapper that delegates to test_runner_claude.py with --repeat parameter.
 Adds system-level features like sleep prevention and Edge process cleanup.
+Supports optional tscon execution for RDP session switching.
 """
 import sys
-import ctypes
 import subprocess
+import asyncio
 from pathlib import Path
 from datetime import datetime
 
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Windows API constants for preventing sleep
-ES_CONTINUOUS = 0x80000000
-ES_SYSTEM_REQUIRED = 0x00000001
-ES_DISPLAY_REQUIRED = 0x00000002
-
-
-class TeeLogger:
-	"""Writes to both console and file simultaneously"""
-	def __init__(self, file_path):
-		self.terminal = sys.stdout
-		self.log = open(file_path, 'w', encoding='utf-8', errors='replace')
-
-	def write(self, message):
-		# Write to terminal with error handling for unicode
-		try:
-			self.terminal.write(message)
-		except UnicodeEncodeError:
-			# Fallback: replace problematic characters
-			self.terminal.write(message.encode(self.terminal.encoding, errors='replace').decode(self.terminal.encoding))
-
-		# Write to log file (UTF-8, no issues)
-		self.log.write(message)
-		self.log.flush()  # Ensure immediate write
-
-	def flush(self):
-		self.terminal.flush()
-		self.log.flush()
-
-	def close(self):
-		self.log.close()
-
-
-def setup_logging(log_dir: Path) -> tuple[TeeLogger, Path]:
-	"""Setup log file with console output duplication.
-
-	Args:
-		log_dir: Directory to store log files
-
-	Returns:
-		Tuple of (TeeLogger instance, log file path)
-	"""
-	log_dir.mkdir(parents=True, exist_ok=True)
-	timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-	log_file = log_dir / f"batch_run_{timestamp}.log"
-
-	tee = TeeLogger(log_file)
-	return tee, log_file
-
-
-def prevent_sleep():
-	"""Prevent system from entering sleep/low-power state during tests."""
-	try:
-		ctypes.windll.kernel32.SetThreadExecutionState(
-			ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
-		)
-		print("[Sleep Prevention] ✅ System sleep disabled for test duration")
-		return True
-	except Exception as e:
-		print(f"[Sleep Prevention] ⚠️ Could not disable sleep: {e}")
-		return False
-
-
-def allow_sleep():
-	"""Re-enable system sleep after tests complete."""
-	try:
-		ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
-		print("[Sleep Prevention] ✅ System sleep re-enabled")
-	except Exception as e:
-		print(f"[Sleep Prevention] ⚠️ Could not re-enable sleep: {e}")
-
-
-def kill_edge_processes():
-	"""Kill all Edge browser processes to ensure clean state.
-
-	Returns:
-		True if processes were found and killed, False if no processes or error
-	"""
-	import time
-
-	try:
-		print("[Cleanup] Checking for Edge browser processes...")
-
-		# Find all msedge.exe processes
-		result = subprocess.run(
-			['tasklist', '/FI', 'IMAGENAME eq msedge.exe', '/FO', 'CSV'],
-			capture_output=True,
-			text=True,
-			timeout=5
-		)
-
-		# Check if any Edge processes are running
-		if 'msedge.exe' in result.stdout:
-			lines = result.stdout.strip().split('\n')
-			process_count = len(lines) - 1
-			print(f"[Cleanup] Found {process_count} Edge process(es), terminating...")
-
-			# Kill all Edge processes forcefully
-			subprocess.run(
-				['taskkill', '/F', '/IM', 'msedge.exe', '/T'],
-				capture_output=True,
-				timeout=10
-			)
-
-			# Wait for processes to fully terminate
-			print("[Cleanup] Waiting 3 seconds for processes to terminate...")
-			time.sleep(3)
-
-			# Verify processes are gone
-			verify = subprocess.run(
-				['tasklist', '/FI', 'IMAGENAME eq msedge.exe', '/FO', 'CSV'],
-				capture_output=True,
-				text=True,
-				timeout=5
-			)
-
-			if 'msedge.exe' not in verify.stdout:
-				print("[Cleanup] ✅ All Edge processes terminated successfully")
-			else:
-				remaining = len(verify.stdout.strip().split('\n')) - 1
-				print(f"[Cleanup] ⚠️ Warning: {remaining} Edge process(es) still running")
-
-			return True  # Processes were killed
-		else:
-			print("[Cleanup] ✅ No Edge processes found")
-			return False  # No processes to kill
-
-	except subprocess.TimeoutExpired:
-		print("[Cleanup] ⚠️ Timeout while checking/killing Edge processes")
-		return False
-	except Exception as e:
-		print(f"[Cleanup] ⚠️ Error during cleanup: {e}")
-		return False
+from test_agent.utils.log_helper import setup_logging
+from test_agent.utils.windows_helper import prevent_sleep, allow_sleep, kill_edge_processes
+from test_agent.utils.tscon_helper import execute_tscon_script
 
 
 def main():
@@ -167,6 +41,17 @@ def main():
 	parser.add_argument("--use-proxy-pool", action="store_true", help="Enable proxy pool")
 	parser.add_argument("--max-proxies", type=int, default=30, help="Max proxies to scrape")
 	parser.add_argument("--disable-browser-focus", action="store_true", help="Disable TOPMOST focus")
+	parser.add_argument(
+		"--enable-tscon",
+		action="store_true",
+		help="Enable tscon helper script execution (switch to Console Session before each run)"
+	)
+	parser.add_argument(
+		"--tscon-wait-time",
+		type=int,
+		default=15,
+		help="Wait time after tscon execution (seconds, default: 15)"
+	)
 
 	args = parser.parse_args()
 
@@ -213,10 +98,24 @@ def main():
 		if args.disable_browser_focus:
 			cmd.append("--disable-browser-focus")
 
+		# Show tscon status
+		print(f"\n[Tscon] tscon execution: {'✅ ENABLED' if args.enable_tscon else '❌ DISABLED (skipped)'}")
+		if args.enable_tscon:
+			print(f"[Tscon] Wait time: {args.tscon_wait_time} seconds")
+			print(f"[Tscon] Will execute ONCE before all test runs (not before each run)")
+
 		# Repeat tests
 		repeat_count = args.repeat
 		print(f"\n[Batch] Will run test_runner_claude.py {repeat_count} times")
 		print(f"[Command] {' '.join(cmd)}\n")
+
+		# Execute tscon ONCE before all test runs (if enabled)
+		if args.enable_tscon:
+			print("\n[Tscon] Executing tscon helper script before starting batch tests...")
+			tscon_success = asyncio.run(execute_tscon_script(wait_time=args.tscon_wait_time))
+			if not tscon_success:
+				print("\n⚠️  tscon script execution failed, but continuing with tests...")
+			print("")
 
 		all_results = []
 		run_durations = []

@@ -1,6 +1,6 @@
 ﻿# tscon 辅助脚本 - 自动授权 Python 进程设置前台窗口权限
-# 用法: .\tscon_with_allow.ps1 -PythonPid <pid>
-# 示例: .\tscon_with_allow.ps1 -PythonPid 12345
+# 用法: .\tscon_worker.ps1 -PythonPid <pid>
+# 示例: .\tscon_worker.ps1 -PythonPid 12345
 
 param(
     [Parameter(Mandatory=$true, HelpMessage="Python 进程的 PID")]
@@ -11,7 +11,7 @@ param(
 # 日志函数
 # ============================================================================
 
-$LogFile = "$env:TEMP\tscon_with_allow.log"
+$LogFile = "$env:TEMP\tscon_worker.log"
 
 function Write-Log {
     param([string]$Message)
