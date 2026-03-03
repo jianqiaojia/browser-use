@@ -25,6 +25,7 @@ import test_agent.Claude.integration.strip_patch  # noqa: F401
 import test_agent.Claude.integration.litellm_patch  # noqa: F401
 
 from browser_use import Agent, BrowserProfile
+from browser_use.agent.views import MessageCompactionSettings
 from test_agent.Claude.integration.llm_config import get_claude_sonnet
 from test_agent.config import config
 from test_agent.view import TestCase, ECTest, TestStep
@@ -104,6 +105,7 @@ async def run_test_case(
 			tools=tools,  # Pass tools with custom actions
 			max_actions_per_step=config.max_actions_per_step,
 			use_vision=config.vision_enabled,
+			message_compaction=MessageCompactionSettings(),
 		)
 
 		# Start focus manager if provided (in background thread, non-blocking)
