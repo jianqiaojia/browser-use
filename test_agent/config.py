@@ -15,7 +15,7 @@ This module provides centralized configuration for:
 
 from pathlib import Path
 from typing import Final, Dict, List, Any, Optional
-from test_agent.Claude.integration.free_proxy_pool import ProxyPool, ProxyServer
+from test_agent.llm.free_proxy_pool import ProxyPool, ProxyServer
 
 # Import for browser proxy settings
 from browser_use.browser.profile import ProxySettings

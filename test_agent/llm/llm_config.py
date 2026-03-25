@@ -20,7 +20,7 @@ DEFAULT_PROXY_API_KEY = os.environ.get('LLM_PROXY_API_KEY', 'dummy-key')  # lite
 
 
 def get_claude_sonnet(
-	model: str = 'claude-sonnet-4-20250514',
+	model: str = 'claude-sonnet-4-5',
 	base_url: str | None = None,
 	api_key: str | None = None,
 	use_native_client: bool = True,
@@ -28,10 +28,10 @@ def get_claude_sonnet(
 	"""Get Claude Sonnet via MicrosoftAI LLM Proxy.
 
 	Args:
-		model: Claude model name
-			- 'claude-sonnet-4-20250514' (Sonnet 4 latest)
-			- 'claude-3-5-sonnet-20241022' (Sonnet 3.5 v2)
-			- 'claude-3-5-sonnet-20240620' (Sonnet 3.5 v1)
+		model: Claude model name (must match proxy deployment name)
+			- 'claude-sonnet-4-5' (recommended)
+			- 'claude-sonnet-4-6'
+			- 'sonnet' (alias)
 		base_url: Proxy endpoint (default: http://localhost:5000)
 		api_key: API key for proxy (if None, tries env vars or 'sk-1234')
 		use_native_client: Use native Anthropic client (recommended, better structured output)

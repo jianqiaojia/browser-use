@@ -297,7 +297,7 @@ def register_os_click(registry: Registry) -> None:
 
 	Usage:
 		from browser_use import Tools
-		from test_agent.custom_actions.os_click import register_os_click
+		from test_agent.actions.os_click import register_os_click
 
 		tools = Tools()
 		register_os_click(tools.registry)

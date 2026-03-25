@@ -1,7 +1,7 @@
 """
 Batch test runner wrapper for Claude tests.
 
-Simplified wrapper that delegates to test_runner_claude.py with --repeat parameter.
+Simplified wrapper that delegates to test_runner.py with --repeat parameter.
 Adds system-level features like sleep prevention and Edge process cleanup.
 Supports optional tscon execution for RDP session switching.
 """
@@ -14,13 +14,13 @@ from datetime import datetime
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from test_agent.utils.log_helper import setup_logging
-from test_agent.utils.windows_helper import prevent_sleep, allow_sleep, kill_edge_processes
-from test_agent.utils.tscon_helper import execute_tscon_script
+from test_agent.scripts.log_helper import setup_logging
+from test_agent.scripts.windows_helper import prevent_sleep, allow_sleep, kill_edge_processes
+from test_agent.scripts.tscon_helper import execute_tscon_script
 
 
 def main():
-	"""Main entry point - wraps test_runner_claude.py with system-level features."""
+	"""Main entry point - wraps test_runner.py with system-level features."""
 	import argparse
 	import time
 
@@ -33,10 +33,10 @@ def main():
 		default=5,
 		help="Number of times to repeat all tests (default: 5)"
 	)
-	# Pass-through args for test_runner_claude.py
+	# Pass-through args for test_runner.py
 	parser.add_argument("--trigger-id", default="batch", help="Test trigger ID")
 	parser.add_argument("--run-id", type=int, default=1, help="Test run ID")
-	parser.add_argument("--model", default="claude-sonnet-4-20250514", help="Claude model")
+	parser.add_argument("--model", default="claude-sonnet-4-5", help="Claude model")
 	parser.add_argument("--proxy", default="http://localhost:5000", help="Proxy endpoint")
 	parser.add_argument("--use-proxy-pool", action="store_true", help="Enable proxy pool")
 	parser.add_argument("--max-proxies", type=int, default=30, help="Max proxies to scrape")
@@ -57,7 +57,7 @@ def main():
 
 	# Setup logging to BOTH file AND console (using TeeLogger)
 	script_dir = Path(__file__).parent
-	log_dir = script_dir.parent.parent / 'test_agent' / 'Claude' / 'test_case_log'
+	log_dir = script_dir.parent / 'logs'
 	tee, log_file = setup_logging(log_dir)
 
 	# Redirect stdout/stderr - TeeLogger will write to BOTH console AND file
@@ -74,11 +74,11 @@ def main():
 	prevent_sleep()
 
 	try:
-		# Build command to run test_runner_claude.py
-		test_runner_script = script_dir / "test_runner_claude.py"
+		# Build command to run test_runner.py
+		test_runner_script = script_dir / "test_runner.py"
 
 		if not test_runner_script.exists():
-			print(f"[FAIL] test_runner_claude.py not found at {test_runner_script}")
+			print(f"[FAIL] test_runner.py not found at {test_runner_script}")
 			return 1
 
 		# Build base command with all arguments (NO --repeat)
@@ -106,7 +106,7 @@ def main():
 
 		# Repeat tests
 		repeat_count = args.repeat
-		print(f"\n[Batch] Will run test_runner_claude.py {repeat_count} times")
+		print(f"\n[Batch] Will run test_runner.py {repeat_count} times")
 		print(f"[Command] {' '.join(cmd)}\n")
 
 		# Execute tscon ONCE before all test runs (if enabled)
@@ -138,14 +138,14 @@ def main():
 				print(f"[Wait] Waiting 2 seconds for cleanup to complete...")
 				time.sleep(2)
 
-			# Run test_runner_claude.py with real-time output streaming
-			print(f"[Batch] Starting test_runner_claude.py...\n")
+			# Run test_runner.py with real-time output streaming
+			print(f"[Batch] Starting test_runner.py...\n")
 			sys.stdout.flush()  # Ensure header is written before subprocess output
 
 			# Use Popen to stream output in real-time
 			process = subprocess.Popen(
 				cmd,
-				cwd=script_dir.parent.parent,
+				cwd=script_dir.parent,
 				stdout=subprocess.PIPE,
 				stderr=subprocess.STDOUT,  # Merge stderr into stdout
 				text=True,

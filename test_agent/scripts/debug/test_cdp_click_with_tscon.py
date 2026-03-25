@@ -62,16 +62,16 @@ except Exception:
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # 导入 UIA Helper
-from test_agent.utils.uia_helper import UIAHelper
+from test_agent.scripts.uia_helper import UIAHelper
 
 # 导入 cdp_click 中的简化版焦点设置函数
-from test_agent.custom_actions.cdp_click import bring_window_to_foreground
+from test_agent.actions.cdp_click import bring_window_to_foreground
 
 # 导入 tscon helper
-from test_agent.utils.tscon_helper import execute_tscon_script
+from test_agent.scripts.tscon_helper import execute_tscon_script
 
 # 导入 screenshot helper
-from test_agent.utils.screenshot_helper import take_screenshot
+from test_agent.scripts.screenshot_helper import take_screenshot
 
 
 # ============================================================================

@@ -9,7 +9,7 @@ Browser Focus Manager - 浏览器窗口焦点管理器
 3. 兼容 tscon 后的 Desktop 切换（使用新线程）
 
 使用方法：
-    from test_agent.utils.browser_focus_manager import BrowserFocusManager
+    from test_agent.scripts.browser_focus_manager import BrowserFocusManager
 
     # 启动 browser-use
     agent = Agent(...)
