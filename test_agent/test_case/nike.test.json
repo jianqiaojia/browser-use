@@ -1,0 +1,51 @@
+{
+    "domain": "Nike Checkout",
+    "test_cases": [
+        {
+            "test_case_name": "Nike checkout page autofill (Guest)",
+            "test_case_description": "Navigate to Nike checkout page as guest, trigger autofill popup, and click autofill button. Preconditions: Edge browser has at least one saved address",
+            "filter": {
+                "site_type": "inline topsite",
+                "priority": 1,
+                "feature": "checkout"
+            },
+            "steps": [
+                {
+                    "step_name": "Navigate to cart page and handle cart items",
+                    "step_description": "Navigate to Nike cart page (https://www.nike.com/cart). IMPORTANT: After navigation, wait 3 seconds for the page to load completely, then extract the page content again to get the actual cart state (the initial page load may show incorrect cart count). Then handle cart items based on their actual status: (1) First, if there are any items marked as 'Sold Out', 'Not Available', 'Out of Stock', or similar unavailable status, remove ALL these unavailable items by clicking their remove/delete buttons. (2) After removing unavailable items (if any), check if cart still has valid items remaining. If YES (cart has at least one valid item that can be checked out), proceed to next step. (3) If NO (cart is empty after removing unavailable items, or was empty from the start), then find ONE product that is AVAILABLE (NOT showing 'Coming Soon', 'Not Available', 'Out of Stock', or 'Sold Out'), add ONLY this one item to cart, then return to cart page (https://www.nike.com/cart) and wait 5 seconds to verify the item was added successfully.",
+                    "expected_result": "Cart page should show at least one valid item ready for checkout. All unavailable items should have been removed. Cart is ready to proceed to checkout."
+                },
+                {
+                    "step_name": "Navigate to checkout page",
+                    "step_description": "From the cart page with valid items, proceed to checkout by clicking the checkout button or navigate directly to https://www.nike.com/checkout.",
+                    "expected_result": "Should successfully reach checkout page at https://www.nike.com/checkout with cart items loaded, showing the checkout form with email input field."
+                },
+                {
+                    "step_name": "Initialize log file monitor",
+                    "step_description": "Initialize log file monitor to track autofill status changes from Edge logs. ONLY do this if you haven't initialized it yet in previous steps.",
+                    "expected_result": "Log monitor should be initialized successfully"
+                },
+                {
+                    "step_name": "Trigger autofill popup",
+                    "step_description": "Clear the email input field by typing empty string with clear=true to remove any cached/prefilled values, then wait 0.5 seconds. After clearing, use cdp_click action to click the email input field ONCE (cdp_click automatically manages window focus), then wait 2 seconds and call uia_wait_for_popup (timeout: 5 seconds) to detect the popup. If popup detection fails (returns error or timeout), use os_click as backup: perform os_click on the email field ONCE, wait 2 seconds, then call uia_wait_for_popup again (timeout: 5 seconds).",
+                    "expected_result": "Email field should be cleared. cdp_click (with auto focus management) should trigger the autofill popup on the first try. If cdp_click fails, os_click backup should trigger the popup. Edge's Express Checkout autofill popup should appear and be detected by UIA (popup visible, regardless of option count)"
+                },
+                {
+                    "step_name": "Click autofill button via UIA",
+                    "step_description": "Use uia_select_autofill action to click the first autofill option in the detected popup. This should trigger the autofill process to fill all form fields.",
+                    "expected_result": "UIA should successfully click the autofill button, and form fields (email, firstName, lastName, address, etc.) should be automatically filled"
+                },
+                {
+                    "step_name": "Wait for autofill completion via log monitor",
+                    "step_description": "Use log monitor to wait for checkout state 'AutofillSucceeded' from the Edge log file with a timeout of 30 seconds. This confirms that autofill has completed successfully",
+                    "expected_result": "Log file monitor should detect state 'AutofillSucceeded' indicating the autofill operation completed successfully"
+                }
+            ],
+            "replay_steps": [],
+            "enable_features": "--enable-features=msEdgeSettingsWalletWebui2",
+            "disable_features": null,
+            "prerun_calls": null,
+            "postrun_calls": null
+        }
+    ]
+}

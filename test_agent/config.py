@@ -37,7 +37,7 @@ ENABLE_FEATURES: Final[str] = ''
 DISABLE_FEATURES: Final[str] = ''
 
 # Agent Configuration
-MAX_ACTIONS_PER_STEP: Final[int] = 5  # 新版推荐值
+MAX_ACTIONS_PER_STEP: Final[int] = 10  # 增大以减少 LLM 调用次数，提升执行速度
 MAX_STEPS: Final[int] = 50  # 增加以确保有足够步骤完成所有任务（原 20 步不够）
 VISION_ENABLED: Final[bool] = False
 
@@ -116,6 +116,11 @@ class TestAgentConfig:
             # 注意：不能设置 window_size=None，因为会触发 --start-maximized
             # 也不能完全省略，因为 detect_display_configuration() 会自动设置为屏幕大小
             # 解决方案：需要修改启动参数来移除 --window-size 和 --window-position
+            # --- 速度优化 ---
+            'minimum_wait_page_load_time': 0.1,       # 默认 0.25s → 缩短页面状态采集前的最短等待
+            'wait_for_network_idle_page_load_time': 0.2,  # 默认 0.5s → 缩短网络空闲等待
+            'wait_between_actions': 0.05,             # 默认 0.1s → 同一 step 内 action 间隔
+            'interaction_highlight_duration': 0.3,   # 默认 1.0s → 元素高亮持续时间（纯视觉，不影响逻辑）
         }
 
         # Add proxy if configured (will be set by async call)
