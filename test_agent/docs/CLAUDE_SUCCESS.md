@@ -23,13 +23,13 @@ Claude能够正确响应基本请求，返回JSON格式。
 ### 快速测试
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_claude_quick.py
+python test_agent/test_runner.py --model claude-sonnet-4-5 --max-steps 1
 ```
 
 ### 运行所有测试用例（推荐）
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_runner_claude.py
+python test_agent/test_runner.py
 ```
 
 **自动发现**: 会自动找到 `test_agent/test_case/` 下所有 `*.test.json` 文件并运行。
@@ -37,27 +37,27 @@ uv run python test_runner_claude.py
 ### 可选参数
 ```bash
 # 使用不同的Claude模型
-uv run python test_runner_claude.py --model claude-3-5-sonnet-20241022
+python test_agent/test_runner.py --model claude-sonnet-4-5
 
 # 使用不同的proxy地址
-uv run python test_runner_claude.py --proxy http://localhost:8000
+python test_agent/test_runner.py --proxy http://localhost:8000
 
 # 设置trigger ID和run ID
-uv run python test_runner_claude.py --trigger-id ci --run-id 123
+python test_agent/test_runner.py --trigger-id ci --run-id 123
 ```
 
 结果会保存到：
 ```
-test_agent/test_case/<test_name>_claude.history.json
+logs/<test_name>.history.json
 ```
 
 ## 🔧 配置文件
 
 ### 核心文件
-- `test_agent/llm_config.py` - LLM配置（Claude & GPT-4o）
-- `test_agent/litellm_patch.py` - Usage tokens fallback
-- `test_agent/strip_patch.py` - 强制strip markdown包裹
-- `test_runner_claude.py` - Claude测试运行器
+- `test_agent/llm/llm_config.py` - LLM配置（Claude & GPT-4o）
+- `test_agent/llm/litellm_patch.py` - Usage tokens fallback
+- `test_agent/llm/strip_patch.py` - 强制strip markdown包裹
+- `test_agent/test_runner.py` - Claude测试运行器
 
 ### 关键配置
 ```python
@@ -66,7 +66,7 @@ DEFAULT_PROXY_ENDPOINT = 'http://localhost:5000'
 
 # Claude配置
 llm = ChatOpenAI(
-    model='claude-sonnet-4-20250514',
+    model='claude-sonnet-4-5',
     base_url='http://localhost:5000',
     temperature=0.7,
     add_schema_to_system_prompt=True,
@@ -122,7 +122,7 @@ netstat -ano | findstr "5000"
 
 直接运行测试（自动发现所有test文件）：
 ```bash
-uv run python test_runner_claude.py
+python test_agent/test_runner.py
 ```
 
 它会自动找到并运行所有 `test_agent/test_case/**/*.test.json` 文件，然后对比history文件，看看Claude是否能完整走完流程！

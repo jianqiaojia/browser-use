@@ -7,9 +7,9 @@
 ```
 用户
   │
-  ├─→ test_runner_claude.py (测试运行器)
+  ├─→ test_agent/test_runner.py (测试运行器)
   │      │
-  │      ├─→ test_agent/llm_config.py::get_claude_sonnet()
+  │      ├─→ test_agent/llm/llm_config.py::get_claude_sonnet()
   │      │      │
   │      │      └─→ ChatAnthropic (native Anthropic client)
   │      │             │
@@ -25,8 +25,8 @@
   │             │      │
   │             │      └─→ Patches应用 (在响应前处理)
   │             │             │
-  │             │             ├─→ strip_patch.py (清理markdown)
-  │             │             └─→ litellm_patch.py (处理usage tokens)
+  │             │             ├─→ llm/strip_patch.py (清理markdown)
+  │             │             └─→ llm/litellm_patch.py (处理usage tokens)
   │             │
   │             └─→ Tools (browser actions)
 ```
@@ -36,12 +36,12 @@
 #### 1. **Native Anthropic Client 层**
 
 ```python
-# test_agent/llm_config.py
+# test_agent/llm/llm_config.py
 
 from browser_use.llm.anthropic.chat import ChatAnthropic
 
 llm = ChatAnthropic(
-    model='claude-sonnet-4-20250514',
+    model='claude-sonnet-4-5',
     api_key='sk-1234',  # proxy不验证
     base_url='http://localhost:5000',  # litellm proxy
     temperature=0.7,
@@ -62,7 +62,7 @@ llm = ChatAnthropic(
 ##### Patch 1: strip_patch.py (Aggressive Markdown Stripping)
 
 ```python
-# test_agent/strip_patch.py
+# test_agent/llm/strip_patch.py
 
 def patch_aggressive_strip():
     """Patch BaseModel.model_validate_json"""
@@ -91,7 +91,7 @@ def patch_aggressive_strip():
 ##### Patch 2: litellm_patch.py (Usage Tokens Fallback)
 
 ```python
-# test_agent/litellm_patch.py
+# test_agent/llm/litellm_patch.py
 
 def patch_openai_get_usage():
     """处理litellm proxy不返回usage的情况"""
@@ -171,7 +171,7 @@ MicrosoftAI LLM Proxy (litellm)
 ```python
 # Anthropic原生API的消息格式
 {
-  "model": "claude-sonnet-4-20250514",
+  "model": "claude-sonnet-4-5",
   "messages": [...],
   "tools": [{  # 工具定义（类似OpenAI的functions）
     "name": "agent_output",
@@ -305,7 +305,7 @@ browser-use strip (只在某些路径)
 ### 新架构 (Claude)
 
 ```
-test_runner_claude.py
+test_agent/test_runner.py
   ↓
 ChatAnthropic (Native接口)
   ↓

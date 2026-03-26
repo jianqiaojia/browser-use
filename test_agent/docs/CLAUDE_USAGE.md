@@ -8,9 +8,8 @@ Claude Sonnet对结构化输出的遵循性更好，基本不会出现这个问�
 
 ## 文件说明
 
-- `test_agent/llm_config.py` - LLM配置模块，支持Claude和GPT-4o
-- `test_runner_claude.py` - 使用Claude运行测试的脚本
-- `test_claude_quick.py` - 快速测试Claude是否配置正确
+- `test_agent/llm/llm_config.py` - LLM配置模块，支持Claude和GPT-4o
+- `test_agent/test_runner.py` - 使用Claude运行测试的脚本
 
 ## 使用方法
 
@@ -28,45 +27,38 @@ Claude Sonnet对结构化输出的遵循性更好，基本不会出现这个问�
 
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_claude_quick.py
-```
-
-应该看到：
-```
-✅ Success!
-Response: {"message": "Hello from Claude!"}
+python test_agent/test_runner.py --model claude-sonnet-4-5
 ```
 
 ### 3. 运行你的测试用例（使用Claude）
 
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_runner_claude.py "test_agent/test_case/your_test.json"
+python test_agent/test_runner.py
 ```
 
 #### 可选参数：
 
 ```bash
 # 使用不同的Claude模型
-uv run python test_runner_claude.py test.json --model claude-3-5-sonnet-20241022
+python test_agent/test_runner.py --model claude-sonnet-4-5
 
 # 使用不同的proxy地址
-uv run python test_runner_claude.py test.json --proxy http://localhost:8000
+python test_agent/test_runner.py --proxy http://localhost:8000
 ```
 
 ### 4. 对比GPT-4o和Claude的结果
 
 运行同样的测试，对比history文件：
-- GPT-4o: `test_case/your_test.history.json`
-- Claude: `test_case/your_test_claude.history.json`
+- 结果: `logs/<test_name>.history.json`
 
 ## 支持的Claude模型
 
 通过MicrosoftAI LLM Proxy可以使用：
 
-- `claude-sonnet-4-20250514` - Claude Sonnet 4（最新，推荐）
-- `claude-3-5-sonnet-20241022` - Claude 3.5 Sonnet v2
-- `claude-3-5-sonnet-20240620` - Claude 3.5 Sonnet v1
+- `claude-sonnet-4-5` - Claude Sonnet 4.5（推荐）
+- `claude-sonnet-4-6` - Claude Sonnet 最新版
+- `claude-opus-4-5` - Claude Opus（更强，更慢）
 
 ## 配置说明
 
@@ -85,7 +77,7 @@ export LLM_PROXY_ENDPOINT=http://localhost:8000
 如果你想在自己的代码中使用：
 
 ```python
-from test_agent.llm_config import get_claude_sonnet, get_gpt4o
+from test_agent.llm.llm_config import get_claude_sonnet
 
 # 使用Claude
 llm = get_claude_sonnet()
@@ -131,5 +123,5 @@ llm = get_gpt4o()
 
 尝试使用更新的Claude模型：
 ```bash
-uv run python test_runner_claude.py test.json --model claude-sonnet-4-20250514
+python test_agent/test_runner.py --model claude-sonnet-4-5
 ```

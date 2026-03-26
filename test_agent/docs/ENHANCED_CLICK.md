@@ -59,7 +59,7 @@ Browser-use 的 click action **并不是**简单的 `this.click()`，而是：
 #### Claude 测试（失败）
 
 ```json
-// nike_checkout_page_autofill_(guest)_claude.history.json line 579-588
+// logs/nike_checkout_page_autofill_(guest).history.json line 579-588
 "action": [
   {
     "click": {
@@ -159,7 +159,7 @@ use click_with_focus_action instead of regular click"
 ### 方法2：测试用例中明确指定
 
 ```python
-from test_agent.custom_actions import register_enhanced_click
+from test_agent.actions import register_enhanced_click
 from browser_use import Agent, BrowserProfile, Tools
 
 # 创建 tools
@@ -192,7 +192,7 @@ Step 3: Verify popup is visible
 ### 关键代码
 
 ```python
-# test_agent/custom_actions/enhanced_click.py
+# test_agent/actions/enhanced_click.py (已废弃 - 标准 click 足够用)
 
 js_code = '''
 function() {
@@ -266,8 +266,9 @@ function() {
 
 ```python
 def register_custom_actions(tools: Tools):
-    # Register enhanced click action
-    register_enhanced_click(tools.registry)
+    # Register os_click and cdp_click actions
+    register_os_click(tools.registry)
+    register_cdp_click(tools.registry)
 
     # ... 其他自定义 actions
 ```

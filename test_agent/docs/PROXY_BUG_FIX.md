@@ -2,7 +2,7 @@
 
 ## 🐛 问题描述
 
-用户运行 `python test_runner_claude.py --use-proxy-pool` 后发现代理池没有生效，测试仍然遇到反爬虫问题。
+用户运行 `python test_agent/test_runner.py --use-proxy-pool` 后发现代理池没有生效，测试仍然遇到反爬虫问题。
 
 ## 🔍 根本原因
 
@@ -48,7 +48,7 @@ async def get_proxy_for_browser(self) -> Optional[ProxySettings]:
     return None
 ```
 
-### 2. 修改 `test_runner_claude.py`
+### 2. 修改 `test_agent/test_runner.py`
 
 **更新变量名以提高可读性**：
 ```python
@@ -64,7 +64,7 @@ if proxy_settings:
 ### 快速测试
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_proxy_quick.py
+python test_agent/test_runner.py --use-proxy-pool --max-proxies 3
 ```
 
 预期输出：
@@ -87,7 +87,7 @@ uv run python test_proxy_quick.py
 ### 完整测试
 ```bash
 # 使用代理池运行Nike测试
-uv run python test_runner_claude.py --use-proxy-pool
+python test_agent/test_runner.py --use-proxy-pool
 ```
 
 现在应该能看到：
@@ -105,10 +105,10 @@ uv run python test_runner_claude.py --use-proxy-pool
 
 ### 修复前（不工作）
 ```python
-# config.py
+# test_agent/config.py
 return {'server': proxy.url}  # ❌ Dict
 
-# test_runner_claude.py
+# test_agent/test_runner.py
 browser_config['proxy'] = proxy_config  # ❌ Dict被传入
 # BrowserProfile 收到 dict，但期望 ProxySettings 对象
 # 结果：代理被忽略，不生效
@@ -116,10 +116,10 @@ browser_config['proxy'] = proxy_config  # ❌ Dict被传入
 
 ### 修复后（工作）
 ```python
-# config.py
+# test_agent/config.py
 return ProxySettings(server=proxy.url)  # ✅ ProxySettings对象
 
-# test_runner_claude.py
+# test_agent/test_runner.py
 browser_config['proxy'] = proxy_settings  # ✅ ProxySettings对象
 # BrowserProfile 正确接收并应用代理
 # 结果：代理生效，IP轮换
@@ -174,7 +174,7 @@ class BrowserProfile(BaseModel):
 ## ✨ 修复后的完整工作流程
 
 ```
-用户运行: python test_runner_claude.py --use-proxy-pool
+用户运行: python test_agent/test_runner.py --use-proxy-pool
     ↓
 main() 检测到 --use-proxy-pool 参数
     ↓

@@ -150,7 +150,7 @@ import subprocess
 from pathlib import Path
 
 current_pid = os.getpid()
-script_path = Path(__file__).parent.parent / "utils" / "tscon_worker.ps1"
+script_path = Path(__file__).parent.parent / "scripts" / "tscon_worker.ps1"
 
 # 以管理员权限执行脚本
 powershell_cmd = [
@@ -705,6 +705,6 @@ EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES MyQueryTargetModes
 
 ## 文件位置
 
-- **Azure 初始化脚本**: `test_agent/test_script/init_azure_vm_for_automation.ps1`
-- **tscon 辅助脚本**: `test_agent/utils/tscon_worker.ps1`
-- **焦点设置实现**: `test_agent/custom_actions/cdp_click.py` - `bring_window_to_foreground()`
+- **Azure 初始化脚本**: `test_agent/scripts/debug/init_azure_vm_for_automation.ps1`
+- **tscon 辅助脚本**: `test_agent/scripts/tscon_worker.ps1`
+- **焦点设置实现**: `test_agent/actions/cdp_click.py` - `bring_window_to_foreground()`

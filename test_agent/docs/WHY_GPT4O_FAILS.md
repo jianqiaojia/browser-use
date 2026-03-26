@@ -139,7 +139,7 @@ response = await openai.chat.completions.create(
 ```python
 # browser-use中使用Anthropic时
 response = await anthropic.messages.create(
-    model="claude-sonnet-4-20250514",
+    model="claude-sonnet-4-5",
     messages=[...],
     tools=[{
         "name": "agent_output",
@@ -283,7 +283,7 @@ except ValidationError:
 ```python
 # 我们的方案
 llm = ChatAnthropic(
-    model='claude-sonnet-4-20250514',
+    model='claude-sonnet-4-5',
     base_url='http://localhost:5000',
 )
 ```
@@ -297,7 +297,7 @@ llm = ChatAnthropic(
 ### 2. Aggressive Strip Patch - 100%覆盖
 
 ```python
-# test_agent/strip_patch.py
+# test_agent/llm/strip_patch.py
 # Patch在 BaseModel.model_validate_json 层面
 
 original_validate_json = BaseModel.model_validate_json

@@ -17,7 +17,7 @@
 
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_runner_claude.py --use-proxy-pool
+python test_agent/test_runner.py --use-proxy-pool
 ```
 
 这会：
@@ -29,10 +29,10 @@ uv run python test_runner_claude.py --use-proxy-pool
 
 ```bash
 # 抓取更多代理（更稳定但启动慢）
-uv run python test_runner_claude.py --use-proxy-pool --max-proxies 50
+python test_agent/test_runner.py --use-proxy-pool --max-proxies 50
 
 # 快速测试（少量代理）
-uv run python test_runner_claude.py --use-proxy-pool --max-proxies 10
+python test_agent/test_runner.py --use-proxy-pool --max-proxies 10
 ```
 
 ## 📊 代理池管理
@@ -41,10 +41,10 @@ uv run python test_runner_claude.py --use-proxy-pool --max-proxies 10
 
 ```bash
 # 抓取并验证30个代理
-uv run python test_agent/free_proxy_pool.py --scrape --count 30
+python -m test_agent.llm.free_proxy_pool --scrape --count 30
 
 # 抓取并保存到文件
-uv run python test_agent/free_proxy_pool.py --scrape --count 30 --save proxies.txt
+python -m test_agent.llm.free_proxy_pool --scrape --count 30 --save proxies.txt
 ```
 
 输出示例：
@@ -216,7 +216,7 @@ print(f"Avg Success Rate: {stats['avg_success_rate']:.1%}")
 
 ```python
 import asyncio
-from test_agent.free_proxy_pool import FreeProxyScraper, ProxyServer
+from test_agent.llm.free_proxy_pool import FreeProxyScraper, ProxyServer
 
 async def test():
     proxy = ProxyServer(host='103.152.112.162', port=80)
@@ -245,7 +245,7 @@ asyncio.run(test())
 ```python
 import asyncio
 from browser_use import Agent, BrowserProfile
-from test_agent.llm_config import get_claude_sonnet
+from test_agent.llm.llm_config import get_claude_sonnet
 from test_agent.config import config
 
 async def main():
@@ -365,13 +365,13 @@ class ProxyPool:
 ### Q: 抓取代理很慢？
 A: 这是正常的。验证500个代理需要30-60秒。可以：
 - 减少 `--max-proxies` 数量（如 `--max-proxies 10`）
-- 提前抓取并保存到文件：`python free_proxy_pool.py --scrape --save proxies.txt`
+- 提前抓取并保存到文件：`python -m test_agent.llm.free_proxy_pool --scrape --save proxies.txt`
 
 ### Q: 所有代理都被屏蔽了？
 A: ProxyPool会自动重置成功率最高的1/3代理。如果仍然不够：
 ```bash
 # 重新抓取更多代理
-uv run python test_runner_claude.py --use-proxy-pool --max-proxies 100
+python test_agent/test_runner.py --use-proxy-pool --max-proxies 100
 ```
 
 ### Q: 能不能直接设置代理而不抓取？

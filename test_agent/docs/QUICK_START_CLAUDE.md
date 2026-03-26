@@ -4,7 +4,7 @@
 
 ```bash
 cd "q:\AI\browser-use"
-uv run python test_claude_quick.py
+python test_agent/test_runner.py --model claude-sonnet-4-5
 ```
 
 应该看到：
@@ -19,17 +19,17 @@ uv run python test_claude_quick.py
 
 ```bash
 # 自动发现并运行所有 *.test.json 文件
-uv run python test_runner_claude.py
+python test_agent/test_runner.py
 ```
 
 ### 使用代理池运行（推荐用于反爬虫网站）
 
 ```bash
 # 启用免费代理池（自动抓取30个代理）
-uv run python test_runner_claude.py --use-proxy-pool
+python test_agent/test_runner.py --use-proxy-pool
 
 # 自定义代理数量
-uv run python test_runner_claude.py --use-proxy-pool --max-proxies 50
+python test_agent/test_runner.py --use-proxy-pool --max-proxies 50
 ```
 
 **代理池功能**：
@@ -41,8 +41,8 @@ uv run python test_runner_claude.py --use-proxy-pool --max-proxies 50
 ## 3. 测试代理池集成
 
 ```bash
-# 快速验证代理池功能
-uv run python test_proxy_integration.py
+# 快速验证代理池功能（启用代理池后观察输出）
+python test_agent/test_runner.py --use-proxy-pool --max-proxies 5
 ```
 
 应该看到：
@@ -57,7 +57,7 @@ uv run python test_proxy_integration.py
 
 History文件会保存到：
 ```
-test_agent/test_case/<test_name>_claude.history.json
+logs/<test_name>.history.json
 ```
 
 ## 关键改进

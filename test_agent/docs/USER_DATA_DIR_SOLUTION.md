@@ -166,7 +166,7 @@ class AntiBotHandler:
 **集成到test runner**：
 
 ```python
-# test_runner_claude.py
+# test_agent/test_runner.py
 
 from test_agent.anti_bot_handler import AntiBotHandler
 

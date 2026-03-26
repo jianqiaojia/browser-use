@@ -96,13 +96,9 @@ If you continue experiencing issues, try refreshing the page.
 **实现代码**：
 
 ```python
-# test_agent/proxy_manager.py
+# test_agent/config.py (增强版，示例)
 
-import random
-import asyncio
-from typing import List, Optional
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from test_agent.llm.free_proxy_pool import ProxyPool, ProxyServer
 
 @dataclass
 class ProxyServer:
@@ -342,7 +338,7 @@ if proxy:
 ```python
 # test_agent/config.py - 增强版
 
-from test_agent.proxy_manager import ProxyPool, ProxyServer
+from test_agent.llm.free_proxy_pool import ProxyPool, ProxyServer
 
 class TestAgentConfig:
 	def __init__(self):
@@ -395,7 +391,7 @@ config.init_proxy_pool(provider='brightdata')  # 或 'smartproxy' 或 'file'
 #### 1.3 在test_runner中使用代理
 
 ```python
-# test_runner_claude.py - 增强版
+# test_agent/test_runner.py - 增强版（示例）
 
 async def run_test_case(llm, test, trigger_id, run_id):
 	"""Execute a test case with proxy rotation"""
@@ -699,7 +695,7 @@ export SMARTPROXY_PASSWORD=your_password
 # 在 test_agent/config.py 中启用代理
 
 # 4. 运行测试
-uv run python test_runner_claude.py
+python test_agent/test_runner.py
 ```
 
 **预期**：从20%成功率 → 90%+成功率！

@@ -47,13 +47,13 @@ Nike checkout 页面的 email 字段点击后无法触发 Edge 的 Express Check
 
 ## 验证
 
-此方案已在 GPT-4o 测试中验证成功（见 `test_agent/test_case/nike_checkout_page_autofill.history.json` line 1045-1070）。
+此方案已在 GPT-4o 测试中验证成功（见 `logs/nike_checkout_page_autofill.history.json` line 1045-1070）。
 
 ## 相关文件
 
-- 测试用例：`test_agent/test_case/checkout/nike.test.json`
-- 问题分析：`test_agent/custom_actions/ENHANCED_CLICK.md`
-- GPT-4o 成功日志：`test_agent/test_case/nike_checkout_page_autofill.history.json`
+- 测试用例：`test_agent/test_case/nike.test.json`
+- 问题分析：`test_agent/docs/ENHANCED_CLICK.md`
+- GPT-4o 成功日志：`logs/nike_checkout_page_autofill.history.json`
 
 ---
 
