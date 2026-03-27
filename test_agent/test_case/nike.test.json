@@ -1,29 +1,34 @@
 {
     "domain": "Nike Checkout",
     "shared_steps": {
+        "sign_out": {
+            "step_name": "Sign out of Nike account",
+            "step_description": "Call clear_site_data with domain='nike.com' to clear all Nike cookies and storage. Then navigate to https://www.nike.com and verify the page shows an unauthenticated state (no account greeting).",
+            "expected_result": "Nike session should be cleared. Page should show 'Join Us / Sign In' or similar unauthenticated state with no account greeting."
+        },
         "sign_in": {
             "step_name": "Sign in to Nike account",
-            "step_description": "Navigate to https://www.nike.com and sign in using the account credentials. Steps: (1) Navigate to https://www.nike.com. Wait 3 seconds for the page to load. (2) Look for a sign-in link or icon (typically 'Join Us / Sign In', a profile icon, or similar). Click it to open the login form or navigate directly to https://www.nike.com/login. (3) On the login page, enter email 'happyautoec@outlook.com' in the email field, click Continue or Next. (4) Nike may present one of two challenge screens: (a) If the page shows a 'Use Password' or 'Sign in with password' button, click it to switch to password login. (b) If the page shows an email verification code input (e.g. 'Enter the code sent to your email'), call get_email_verification_code action with not_before set to the Unix timestamp (seconds) captured just before you clicked Continue/Next in step (3) — this ensures only the freshly-sent code is matched, not any older codes in the inbox. Set timeout_seconds=60. Then type the returned code into the input field and submit. (5) Enter password 'Happy@1234' in the password field (if on password screen) and click Sign In. (6) Wait up to 10 seconds for login to complete. Handle any intermediate screens: CAPTCHA prompts (stop and report), 'Stay signed in' dialogs (click Yes/Confirm). (7) Verify login succeeded by checking for a user account icon, profile name, or 'Hi, [name]' greeting. If login failed (error message visible), report the failure and stop.",
-            "expected_result": "User should be successfully signed in to Nike. Page should show account icon or greeting indicating authenticated state. No error messages about incorrect credentials."
+            "step_description": "Sign in to Nike using email 'happyautoec@outlook.com' and password 'Happy@1234'. IMPORTANT: call email_mark_baseline BEFORE submitting the email, so that get_email_verification_code can later retrieve only freshly-arrived codes. If Nike asks for an email verification code instead of a password, call get_email_verification_code (sender_filter='nike', timeout_seconds=60) to retrieve it. Goal: reach an authenticated state where the account is recognized.",
+            "expected_result": "User should be successfully signed in to Nike. Page should show account icon or greeting indicating authenticated state."
         },
         "handle_cart": {
             "step_name": "Navigate to cart page and handle cart items",
-            "step_description": "Navigate to Nike cart page (https://www.nike.com/cart). IMPORTANT: After navigation, wait 3 seconds for the page to load completely, then extract the page content again to get the actual cart state (the initial page load may show incorrect cart count). Then handle cart items based on their actual status: (1) First, if there are any items marked as 'Sold Out', 'Not Available', 'Out of Stock', or similar unavailable status, remove ALL these unavailable items by clicking their remove/delete buttons. (2) After removing unavailable items (if any), check if cart still has valid items remaining. If YES (cart has at least one valid item that can be checked out), proceed to next step. (3) If NO (cart is empty after removing unavailable items, or was empty from the start), then find ONE product that is AVAILABLE (NOT showing 'Coming Soon', 'Not Available', 'Out of Stock', or 'Sold Out'), add ONLY this one item to cart, then return to cart page (https://www.nike.com/cart) and wait 5 seconds to verify the item was added successfully.",
-            "expected_result": "Cart page should show at least one valid item ready for checkout. All unavailable items should have been removed. Cart is ready to proceed to checkout."
+            "step_description": "Go to the Nike cart (https://www.nike.com/cart). Remove any unavailable items (sold out, out of stock, etc.). If the cart ends up empty, add any one available product. Goal: cart has at least one valid item ready for checkout.",
+            "expected_result": "Cart has at least one valid item ready for checkout."
         },
         "navigate_to_checkout": {
             "step_name": "Navigate to checkout page",
-            "step_description": "From the cart page with valid items, proceed to checkout by clicking the checkout button or navigate directly to https://www.nike.com/checkout. Wait 3 seconds after navigation for the page to fully load. NOTE: If signed in, Nike may skip the guest email entry step and land directly on the shipping address or payment page — any of these is acceptable.",
-            "expected_result": "Should successfully reach checkout page at https://www.nike.com/checkout with cart items loaded. Page may show email input (guest), shipping address form, saved-address selection, or payment section."
+            "step_description": "Proceed from the cart to checkout. Goal: reach the Nike checkout page (https://www.nike.com/checkout) with cart items loaded.",
+            "expected_result": "Checkout page loaded with cart items."
         },
         "init_log_monitor": {
             "step_name": "Initialize log file monitor",
-            "step_description": "Initialize log file monitor to track autofill status changes from Edge logs. ONLY do this if you haven't initialized it yet in previous steps.",
-            "expected_result": "Log monitor should be initialized successfully"
+            "step_description": "Call logmonitor_init to start monitoring Edge logs for autofill status. Skip if already initialized.",
+            "expected_result": "Log monitor initialized successfully."
         },
         "trigger_autofill_popup": {
             "step_name": "Trigger autofill popup",
-            "step_description": "Identify the first editable input field suitable for autofill. Priority order: (1) email field (if visible, i.e. guest checkout), (2) first name or last name field in the shipping address form, (3) street address field, (4) any other visible text input in the shipping or billing section. Once identified: clear the field by typing empty string with clear=true, wait 0.5 seconds. Then use cdp_click to click the field ONCE (cdp_click automatically manages window focus), wait 2 seconds, and call uia_wait_for_popup (timeout: 5 seconds) to detect the autofill popup. If popup detection fails, use os_click as backup: perform os_click on the same field ONCE, wait 2 seconds, then call uia_wait_for_popup again (timeout: 5 seconds). NOTE: If a field is pre-filled, clear it first before clicking.",
+            "step_description": "Goal: get an editable text input field (email, name, or address) focused so Edge's autofill popup appears. Do whatever it takes on the current checkout page to reach an editable input — the page may require clicking Edit or similar buttons first to expose input fields. Once you have an editable field: clear it (type empty string with clear=true), use cdp_click to click it ONCE, wait 2 seconds, then call uia_wait_for_popup (timeout: 5 seconds). If popup not detected, retry once with os_click on the same field, wait 2 seconds, then uia_wait_for_popup (timeout: 5 seconds).",
             "expected_result": "The selected field should be cleared and focused. Edge's Express Checkout autofill popup should appear and be detected by UIA (popup visible, regardless of option count)."
         },
         "uia_click_autofill": {
@@ -33,20 +38,16 @@
         },
         "wait_autofill_log": {
             "step_name": "Wait for autofill completion via log monitor",
-            "step_description": "Use log monitor to wait for checkout state 'AutofillSucceeded' from the Edge log file with a timeout of 30 seconds. This confirms that autofill has completed successfully",
-            "expected_result": "Log file monitor should detect state 'AutofillSucceeded' indicating the autofill operation completed successfully"
+            "step_description": "Call logmonitor_wait_for_state with expected_state='AutofillSucceeded' and timeout=30 to confirm autofill completed.",
+            "expected_result": "State 'AutofillSucceeded' detected in Edge log."
         }
     },
     "test_cases": [
         {
-            "test_case_name": "Nike checkout page autofill (Guest)",
+            "test_case_name": "Nike_autofill_Guest",
             "test_case_description": "Navigate to Nike checkout page as guest, trigger autofill popup, and click autofill button. Preconditions: Edge browser has at least one saved address",
-            "filter": {
-                "site_type": "inline topsite",
-                "priority": 1,
-                "feature": "checkout"
-            },
             "steps": [
+                { "ref": "sign_out" },
                 { "ref": "handle_cart" },
                 { "ref": "navigate_to_checkout" },
                 { "ref": "init_log_monitor" },
@@ -61,13 +62,8 @@
             "postrun_calls": null
         },
         {
-            "test_case_name": "Nike checkout page autofill (Signed In)",
+            "test_case_name": "Nike_autofill_Signed_In",
             "test_case_description": "Sign in to Nike with a registered account, then navigate to checkout and trigger autofill popup. Preconditions: Edge browser has at least one saved address. Account: happyautoec@outlook.com / Happy@1234",
-            "filter": {
-                "site_type": "inline topsite",
-                "priority": 1,
-                "feature": "checkout"
-            },
             "steps": [
                 { "ref": "sign_in" },
                 { "ref": "handle_cart" },

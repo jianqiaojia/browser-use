@@ -19,7 +19,7 @@ from test_agent.config import config
 from test_agent.actions.os_click import register_os_click
 from test_agent.actions.cdp_click import register_cdp_click
 from test_agent.scripts.uia_helper import UIAHelper
-from test_agent.scripts.email_helper import get_verification_code
+from test_agent.scripts.email_helper import async_get_baseline_entry_id, async_get_verification_code
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -41,10 +41,12 @@ class LogMonitorWaitForStateModel(BaseModel):
     expected_state: str = "AutofillSucceeded"
     timeout: float = 30.0
 
+class EmailMarkBaselineModel(BaseModel):
+    pass  # no params needed
+
 class GetEmailVerificationCodeModel(BaseModel):
     sender_filter: str = "nike"
     subject_filter: str = ""
-    not_before: float = 0.0  # Unix timestamp; only accept emails received after this time
     timeout_seconds: int = 60
 
 
@@ -181,6 +183,35 @@ def register_custom_actions(tools: Tools):
         await page.reload()
         msg = '🔗 Refreshed the page'
         return ActionResult(extracted_content=msg, include_in_memory=False)
+
+    @tools.action(
+        description='Clear all cookies and session storage for a given domain, then reload the page. Use this to ensure a clean unauthenticated state before a test (e.g., sign-out without relying on UI).',
+    )
+    async def clear_site_data(domain: str, browser_session: BrowserSession) -> ActionResult:
+        """Delete all cookies matching the domain and clear sessionStorage/localStorage."""
+        # Filter cookies belonging to the target domain
+        all_cookies = await browser_session.cookies()
+        target = [c for c in all_cookies if domain in c.get('domain', '')]
+        if target:
+            # Clear all, then restore cookies not belonging to the target domain
+            await browser_session._cdp_clear_cookies()
+            keep = [c for c in all_cookies if domain not in c.get('domain', '')]
+            if keep:
+                await browser_session._cdp_set_cookies(keep)
+
+        # Clear storage on the current page (best-effort)
+        try:
+            page = await browser_session.get_current_page()
+            await page.evaluate('''() => {
+                try { sessionStorage.clear(); } catch(e) {}
+                try { localStorage.clear(); } catch(e) {}
+            }''')
+        except Exception:
+            pass
+
+        msg = f'✅ Cleared {len(target)} cookies and storage for domain: {domain}'
+        print(msg)
+        return ActionResult(extracted_content=msg, include_in_memory=True)
         
     @tools.action(
         description='Set a value in sessionStorage for the current page',
@@ -204,7 +235,7 @@ def register_custom_actions(tools: Tools):
             return ActionResult(error=msg, include_in_memory=True)
 
     @tools.action(
-        description='Wait for the autofill popup to appear using UIA Helper - continuously checks until popup is detected or timeout',
+        description='Wait for the Edge Express Checkout autofill popup to become visible. Polls repeatedly until detected or timeout expires. Call this after focusing an input field to confirm the popup appeared before proceeding.',
         param_model=UIAWaitForPopupModel
     )
     async def uia_wait_for_popup(
@@ -287,7 +318,7 @@ def register_custom_actions(tools: Tools):
             return ActionResult(error=msg, include_in_memory=True, success=False)
     
     @tools.action(
-        description='Initialize log file monitor - call this at the beginning of checkout test to monitor autofill status from Edge logs',
+        description='Initialize log file monitor for tracking browser state changes. Call this before the action you want to monitor.',
     )
     async def logmonitor_init(browser_session: BrowserSession) -> ActionResult:
         """Initialize log file monitor for checkout state tracking"""
@@ -319,7 +350,7 @@ def register_custom_actions(tools: Tools):
             return ActionResult(error=msg, include_in_memory=True, success=False)
     
     @tools.action(
-        description='Wait for checkout state from log file - use after autofill to verify success (e.g., AutofillSucceeded, AutofillFailed)',
+        description='Wait for a specific state to appear in the log file (e.g., AutofillSucceeded, AutofillFailed). Call logmonitor_init first.',
         param_model=LogMonitorWaitForStateModel
     )
     async def logmonitor_wait_for_state(
@@ -375,7 +406,7 @@ def register_custom_actions(tools: Tools):
             return ActionResult(error=msg, include_in_memory=True, success=False)
     
     @tools.action(
-        description='Get checkout state history from log file - returns all state changes detected',
+        description='Get all state changes detected so far by the log file monitor.',
     )
     async def logmonitor_get_history(browser_session: BrowserSession) -> ActionResult:
         """Get checkout state change history from log file"""
@@ -400,20 +431,43 @@ def register_custom_actions(tools: Tools):
             return ActionResult(error=msg, include_in_memory=True, success=False)
 
     @tools.action(
-        description='Get email verification code from Outlook inbox - polls for a recent email from Nike and extracts the numeric verification code',
+        description='Mark email baseline — call this BEFORE triggering any login flow that may send a verification email. Records the current newest email EntryID so that get_email_verification_code only returns codes from emails that arrive after this point.',
+    )
+    async def email_mark_baseline(browser_session: BrowserSession) -> ActionResult:
+        """Record current inbox head so we can ignore pre-existing emails."""
+        print('📧 Marking email baseline (recording current inbox head)...')
+        try:
+            entry_id = await async_get_baseline_entry_id()
+            # Store in session so get_email_verification_code can use it
+            if not hasattr(browser_session, '_custom_data'):
+                browser_session._custom_data = {}
+            browser_session._custom_data['email_baseline_entry_id'] = entry_id
+            msg = f'✅ Email baseline set ({"inbox empty" if entry_id is None else "EntryID recorded"})'
+            print(msg)
+            return ActionResult(extracted_content=msg, include_in_memory=True)
+        except Exception as e:
+            msg = f'❌ Failed to mark email baseline: {str(e)}'
+            print(msg)
+            return ActionResult(error=msg, include_in_memory=True, success=False)
+
+    @tools.action(
+        description='Get email verification code from Outlook inbox — polls for a new email that arrived AFTER email_mark_baseline was called, and extracts the numeric verification code. Call email_mark_baseline first.',
         param_model=GetEmailVerificationCodeModel
     )
     async def get_email_verification_code(
         params: GetEmailVerificationCodeModel,
         browser_session: BrowserSession
     ) -> ActionResult:
-        """Poll Outlook inbox for a Nike verification code email and return the code."""
-        print(f'📧 Polling for email verification code (sender={params.sender_filter}, timeout={params.timeout_seconds}s)...')
+        """Poll Outlook inbox for a Nike verification code email newer than the baseline."""
+        baseline = None
+        if hasattr(browser_session, '_custom_data'):
+            baseline = browser_session._custom_data.get('email_baseline_entry_id')
+        print(f'📧 Polling for email verification code (baseline={"set" if baseline else "unset"}, timeout={params.timeout_seconds}s)...')
         try:
-            code = get_verification_code(
+            code = await async_get_verification_code(
+                baseline_entry_id=baseline,
                 sender_filter=params.sender_filter,
                 subject_filter=params.subject_filter,
-                not_before=params.not_before,
                 timeout_seconds=params.timeout_seconds,
             )
             if code:

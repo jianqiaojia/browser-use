@@ -38,11 +38,12 @@ class UIAHelper:
         )
         self.root = self.uia.GetRootElement()
     
-    def _check_element_for_popup_features(self, element: Any, all_text_content: list) -> bool:
+    def _check_element_for_popup_features(self, element: Any, all_text_content: list, verbose: bool = True) -> bool:
         """
         检查一个元素是否有足够的Express Checkout特征字符串（>=3个匹配）。
         all_text_content 已经预先填充了按钮名称。
         """
+        vprint = print if verbose else lambda *_: None
         feature_strings = {
             'Contact info',      # IDS_EDGE_EC_INLINE_CONTACT_INFO
             'Payment methods',   # IDS_EDGE_WALLET_PAYMENT_METHODS
@@ -55,17 +56,18 @@ class UIAHelper:
         for feature in feature_strings:
             if any(feature in text for text in all_text_content):
                 matched_features.append(feature)
-                print(f"  ✓ Found feature: '{feature}'")
+                vprint(f"  ✓ Found feature: '{feature}'")
         if len(matched_features) >= 3:
-            print(f"  ✅ Found Express Checkout Popup! (matched {len(matched_features)} features)")
+            vprint(f"  ✅ Found Express Checkout Popup! (matched {len(matched_features)} features)")
             return True
-        print(f"  ✗ Not enough features matched ({len(matched_features)}/3 required)")
+        vprint(f"  ✗ Not enough features matched ({len(matched_features)}/3 required)")
         return False
 
-    def _collect_buttons_text(self, element: Any) -> tuple[list, Any]:
+    def _collect_buttons_text(self, element: Any, verbose: bool = True) -> tuple[list, Any]:
         """
         在 element 下查找所有 Button，返回 (names_list, button_collection)。
         """
+        vprint = print if verbose else lambda *_: None
         button_condition = self.uia.CreatePropertyCondition(
             UIAutomationClient.UIA_ControlTypePropertyId,
             UIAutomationClient.UIA_ButtonControlTypeId
@@ -77,12 +79,12 @@ class UIAHelper:
                 name = buttons.GetElement(i).CurrentName
                 if name and name.strip():
                     names.append(name)
-                    print(f"    Button {i}: '{name}'")
+                    vprint(f"    Button {i}: '{name}'")
             except:
                 continue
         return names, buttons
 
-    def _has_express_checkout_popup_features(self, window: Any) -> bool | tuple[bool, Any]:
+    def _has_express_checkout_popup_features(self, window: Any, verbose: bool = True) -> bool | tuple[bool, Any]:
         """
         检查窗口是否是Express Checkout Popup。
         - 如果 window 本身有 >=4 个按钮且特征匹配 → 返回 True
@@ -92,20 +94,17 @@ class UIAHelper:
           所以：找到 308px 的 body pane → 爬到父元素 → 父元素包含全部 4 个按钮。
           此时返回 (True, parent_element) 以便调用方使用正确的元素句柄。
         """
+        vprint = print if verbose else lambda *_: None
         try:
-            # 1. 检查窗口宽度 (308px是Express Checkout popup内容区的固定宽度)
             rect = window.CurrentBoundingRectangle
             width = rect.right - rect.left
-            height = rect.bottom - rect.top
 
-            # 宽度应该正好是308，允许DPI缩放导致的误差
             if not (300 <= width <= 320):
-                print(f"  ✗ Width mismatch: {width}px (expected ~308px)")
+                vprint(f"  ✗ Width mismatch: {width}px (expected ~308px)")
                 return False
 
-            print(f"  ✓ Width check passed: {width}px")
+            vprint(f"  ✓ Width check passed: {width}px")
 
-            # 2. 收集文本元素
             all_text_content = []
             try:
                 text_condition = self.uia.CreatePropertyCondition(
@@ -123,23 +122,17 @@ class UIAHelper:
             except Exception as e:
                 print(f"  ✗ Error getting texts: {e}")
 
-            # 3. 收集按钮
             try:
-                print(f"  Collecting buttons in current pane...")
-                btn_names, buttons = self._collect_buttons_text(window)
+                vprint(f"  Collecting buttons in current pane...")
+                btn_names, buttons = self._collect_buttons_text(window, verbose=verbose)
                 all_text_content.extend(btn_names)
-                print(f"  Found {buttons.Length} buttons in pane")
+                vprint(f"  Found {buttons.Length} buttons in pane")
 
                 if buttons.Length >= 4:
-                    # 当前pane已有足够按钮，直接检查特征
-                    print(f"  Found {len(all_text_content)} text/button elements")
-                    return self._check_element_for_popup_features(window, all_text_content)
+                    vprint(f"  Found {len(all_text_content)} text/button elements")
+                    return self._check_element_for_popup_features(window, all_text_content, verbose=verbose)
 
-                # 按钮不足4个（典型情况：body sub-pane 只有 Contact info + Payment methods）
-                # 原因：popup widget 的实际宽度因 shadow/border insets 超出 320px，
-                # 不在外层循环的搜索范围内，但 body content pane 正好是 308px 被找到。
-                # 解决：向上爬到父元素，在父元素中搜索完整的 4 个按钮。
-                print(f"  Only {buttons.Length} buttons in pane, walking up to parent to find full popup...")
+                vprint(f"  Only {buttons.Length} buttons in pane, walking up to parent to find full popup...")
                 try:
                     tree_walker = self.uia.CreateTreeWalker(self.uia.CreateTrueCondition())
                     parent = tree_walker.GetParentElement(window)
@@ -147,18 +140,17 @@ class UIAHelper:
                         parent_rect = parent.CurrentBoundingRectangle
                         parent_width = parent_rect.right - parent_rect.left
                         parent_height = parent_rect.bottom - parent_rect.top
-                        print(f"  Parent element: {parent_width}x{parent_height}")
+                        vprint(f"  Parent element: {parent_width}x{parent_height}")
 
-                        parent_btn_names, parent_buttons = self._collect_buttons_text(parent)
-                        print(f"  Found {parent_buttons.Length} buttons in parent")
+                        parent_btn_names, parent_buttons = self._collect_buttons_text(parent, verbose=verbose)
+                        vprint(f"  Found {parent_buttons.Length} buttons in parent")
                         parent_text_content = list(all_text_content) + parent_btn_names
 
                         if parent_buttons.Length >= 4:
-                            if self._check_element_for_popup_features(parent, parent_text_content):
-                                # 返回 (True, parent) 通知调用方使用父元素句柄
+                            if self._check_element_for_popup_features(parent, parent_text_content, verbose=verbose):
                                 return (True, parent)
                         else:
-                            print(f"  Parent also has < 4 buttons ({parent_buttons.Length}), giving up")
+                            vprint(f"  Parent also has < 4 buttons ({parent_buttons.Length}), giving up")
                 except Exception as e:
                     print(f"  Error walking to parent: {e}")
 
@@ -171,7 +163,7 @@ class UIAHelper:
             print(f"  ✗ Error checking features: {e}")
             return False
     
-    def find_autofill_popup(self) -> Optional[Dict[str, Any]]:
+    def find_autofill_popup(self, verbose: bool = True) -> Optional[Dict[str, Any]]:
         """
         查找 Express Checkout Popup
         基于C++代码edge_express_checkout_view.cc:
@@ -182,10 +174,11 @@ class UIAHelper:
         popup不是顶层窗口，而是浏览器窗口内的Dialog元素！
         """
         try:
-            print(f"\n{'='*60}")
-            print(f"Searching for Express Checkout Popup Dialog...")
-            print(f"{'='*60}")
-            
+            vprint = print if verbose else lambda *_: None
+            vprint(f"\n{'='*60}")
+            vprint(f"Searching for Express Checkout Popup Dialog...")
+            vprint(f"{'='*60}")
+
             # 查找所有Chrome浏览器窗口
             class_condition = self.uia.CreatePropertyCondition(
                 UIAutomationClient.UIA_ClassNamePropertyId,
@@ -196,7 +189,7 @@ class UIAHelper:
                 class_condition
             )
             
-            print(f"Found {windows.Length} Chrome windows, searching for Dialog elements...")
+            vprint(f"Found {windows.Length} Chrome windows, searching for Dialog elements...")
             
             # 在每个Chrome窗口内搜索Dialog角色的元素
             for i in range(windows.Length):
@@ -208,7 +201,7 @@ class UIAHelper:
                     if 'edge' not in name.lower() and 'microsoft' not in name.lower():
                         continue
                     
-                    print(f"\nSearching in browser: {name}")
+                    vprint(f"\nSearching in browser: {name}")
                     
                     # 在窗口内搜索所有Dialog元素
                     dialog_condition = self.uia.CreatePropertyCondition(
@@ -221,7 +214,7 @@ class UIAHelper:
                         dialog_condition
                     )
                     
-                    print(f"  Found {dialogs.Length} pane elements")
+                    vprint(f"  Found {dialogs.Length} pane elements")
                     
                     # 检查每个Dialog
                     for j in range(dialogs.Length):
@@ -234,10 +227,10 @@ class UIAHelper:
                             
                             # 检查宽度是否匹配
                             if 300 <= width <= 320:
-                                print(f"    Pane #{j+1}: {width}x{height}")
-                                
+                                vprint(f"    Pane #{j+1}: {width}x{height}")
+
                                 # 检查是否有Express Checkout特征
-                                result = self._has_express_checkout_popup_features(dialog)
+                                result = self._has_express_checkout_popup_features(dialog, verbose=verbose)
                                 # result 可能是 False / True / (True, parent_element)
                                 if result:
                                     # 如果返回 (True, parent)，使用父元素作为句柄来源
@@ -248,9 +241,9 @@ class UIAHelper:
                                         popup_element = dialog
                                         popup_rect = rect
 
-                                    print(f"\n{'='*60}")
-                                    print(f"✅✅✅ Found Express Checkout Popup!")
-                                    print(f"{'='*60}")
+                                    vprint(f"\n{'='*60}")
+                                    vprint(f"✅✅✅ Found Express Checkout Popup!")
+                                    vprint(f"{'='*60}")
 
                                     # 尝试获取窗口句柄
                                     try:
@@ -277,34 +270,35 @@ class UIAHelper:
                     print(f"  Error searching in window: {e}")
                     continue
             
-            print(f"\n{'='*60}")
-            print("❌ Express Checkout Popup not found")
-            print("Make sure the popup is visible on screen")
-            print(f"{'='*60}\n")
+            vprint(f"\n{'='*60}")
+            vprint("❌ Express Checkout Popup not found")
+            vprint("Make sure the popup is visible on screen")
+            vprint(f"{'='*60}\n")
             return {'success': False, 'error': 'Popup not found in any browser window'}
             
         except Exception as e:
             return {'success': False, 'error': str(e)}
     
-    def get_popup_element(self) -> Optional[Any]:
+    def get_popup_element(self, verbose: bool = True) -> Optional[Any]:
         """获取Popup窗口的UI元素"""
-        print(f"[get_popup_element] Starting...")
-        result = self.find_autofill_popup()
+        vprint = print if verbose else lambda *_: None
+        vprint(f"[get_popup_element] Starting...")
+        result = self.find_autofill_popup(verbose=verbose)
         if result is None or not result.get('success'):
             error_msg = result.get('error', 'Unknown') if result else 'find_autofill_popup returned None'
-            print(f"[get_popup_element] find_autofill_popup failed: {error_msg}")
+            vprint(f"[get_popup_element] find_autofill_popup failed: {error_msg}")
             return None
 
         # 优先使用 find_autofill_popup 已解析好的 element（含父元素场景）
         if 'element' in result and result['element'] is not None:
-            print(f"[get_popup_element] Using element from find_autofill_popup result")
+            vprint(f"[get_popup_element] Using element from find_autofill_popup result")
             return result['element']
 
         hwnd = result['hwnd']
-        print(f"[get_popup_element] Got hwnd: {hwnd}")
+        vprint(f"[get_popup_element] Got hwnd: {hwnd}")
         try:
             element = self.uia.ElementFromHandle(hwnd)
-            print(f"[get_popup_element] ElementFromHandle succeeded, returning element")
+            vprint(f"[get_popup_element] ElementFromHandle succeeded, returning element")
             return element
         except Exception as e:
             print(f"[get_popup_element] Error getting element from handle: {e}")
@@ -312,7 +306,7 @@ class UIAHelper:
             traceback.print_exc()
             return None
 
-    def find_option_buttons(self, parent_element: Any) -> List[Any]:
+    def find_option_buttons(self, parent_element: Any, verbose: bool = True) -> List[Any]:
         """
         查找 autofill 选项按钮
 
@@ -320,7 +314,8 @@ class UIAHelper:
         是 Button 类型，不是 ListItem 类型
         """
         try:
-            print(f"[find_option_buttons] Searching for option buttons...")
+            vprint = print if verbose else lambda *_: None
+            vprint(f"[find_option_buttons] Searching for option buttons...")
 
             # 查找所有 Button 类型的元素
             condition = self.uia.CreatePropertyCondition(
@@ -333,7 +328,7 @@ class UIAHelper:
                 condition
             )
 
-            print(f"[find_option_buttons] Found {buttons.Length} total buttons")
+            vprint(f"[find_option_buttons] Found {buttons.Length} total buttons")
 
             # 过滤出真正的选项按钮（排除 "Autofill", "More actions" 等操作按钮）
             options = []
@@ -345,13 +340,13 @@ class UIAHelper:
                     # 选项按钮的特征：name 很长，包含 "Contact info" 或 "Payment methods"
                     if name and len(name) > 50:
                         if 'Contact info' in name or 'Payment methods' in name:
-                            print(f"[find_option_buttons] Option {len(options)}: '{name[:80]}...'")
+                            vprint(f"[find_option_buttons] Option {len(options)}: '{name[:80]}...'")
                             options.append(button)
                 except Exception as e:
-                    print(f"[find_option_buttons] Error reading button {i}: {e}")
+                    vprint(f"[find_option_buttons] Error reading button {i}: {e}")
                     continue
 
-            print(f"[find_option_buttons] Returning {len(options)} option buttons")
+            vprint(f"[find_option_buttons] Returning {len(options)} option buttons")
             return options
 
         except Exception as e:
@@ -408,12 +403,12 @@ class UIAHelper:
             操作结果字典
         """
         try:
-            popup = self.get_popup_element()
+            popup = self.get_popup_element(verbose=False)
             if popup is None:
                 return {'success': False, 'error': 'Popup not found'}
 
             # 1. 查找选项按钮（使用新的 find_option_buttons）
-            option_buttons = self.find_option_buttons(popup)
+            option_buttons = self.find_option_buttons(popup, verbose=False)
             print(f"Found {len(option_buttons)} option buttons")
 
             if len(option_buttons) > profile_index:
@@ -429,7 +424,6 @@ class UIAHelper:
             for button in all_buttons:
                 try:
                     name = button.CurrentName
-                    print(f"Button name: {name}")
                     if name and name.strip() == 'Autofill':  # 精确匹配 "Autofill"
                         autofill_button = button
                         print(f"Found Autofill button")

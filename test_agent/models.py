@@ -67,12 +67,6 @@ class TestStepEncoder(JSONEncoder):
             }
         return super().default(obj)
         
-class TestFilter(BaseModel):
-    """测试过滤器"""
-    site_type: str
-    priority: int
-    feature: str
-
 class PredefinedFunctionCall(BaseModel):
     """预定义函数调用"""
     function: str  # Name of the function to call
@@ -82,7 +76,6 @@ class TestCase(BaseModel):
     """测试用例"""
     test_case_name: str
     test_case_description: str
-    filter: TestFilter
     steps: list[TestStep] = []
     replay_steps: Optional[list[TestCaseReplayStep]] = None
     disable_features: Optional[str] = None
