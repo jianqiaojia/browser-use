@@ -19,6 +19,7 @@ from test_agent.config import config
 from test_agent.actions.os_click import register_os_click
 from test_agent.actions.cdp_click import register_cdp_click
 from test_agent.scripts.uia_helper import UIAHelper
+from test_agent.scripts.email_helper import get_verification_code
 
 class LoginToMSA(BaseModel):
     userName: str
@@ -39,6 +40,13 @@ class UIAWaitForPopupModel(BaseModel):
 class LogMonitorWaitForStateModel(BaseModel):
     expected_state: str = "AutofillSucceeded"
     timeout: float = 30.0
+
+class GetEmailVerificationCodeModel(BaseModel):
+    sender_filter: str = "nike"
+    subject_filter: str = ""
+    not_before: float = 0.0  # Unix timestamp; only accept emails received after this time
+    timeout_seconds: int = 60
+
 
 def register_custom_actions(tools: Tools):
     """Register custom actions for test automation.
@@ -389,6 +397,34 @@ def register_custom_actions(tools: Tools):
             return ActionResult(extracted_content=msg, include_in_memory=True)
             
         except Exception as e:
-            msg = f'❌ Failed to get state history: {str(e)}'
+            return ActionResult(error=msg, include_in_memory=True, success=False)
+
+    @tools.action(
+        description='Get email verification code from Outlook inbox - polls for a recent email from Nike and extracts the numeric verification code',
+        param_model=GetEmailVerificationCodeModel
+    )
+    async def get_email_verification_code(
+        params: GetEmailVerificationCodeModel,
+        browser_session: BrowserSession
+    ) -> ActionResult:
+        """Poll Outlook inbox for a Nike verification code email and return the code."""
+        print(f'📧 Polling for email verification code (sender={params.sender_filter}, timeout={params.timeout_seconds}s)...')
+        try:
+            code = get_verification_code(
+                sender_filter=params.sender_filter,
+                subject_filter=params.subject_filter,
+                not_before=params.not_before,
+                timeout_seconds=params.timeout_seconds,
+            )
+            if code:
+                msg = f'✅ Got verification code: {code}'
+                print(msg)
+                return ActionResult(extracted_content=msg, include_in_memory=True)
+            else:
+                msg = f'❌ Verification code not found within {params.timeout_seconds}s'
+                print(msg)
+                return ActionResult(error=msg, include_in_memory=True, success=False)
+        except Exception as e:
+            msg = f'❌ Error getting verification code: {str(e)}'
             print(msg)
             return ActionResult(error=msg, include_in_memory=True, success=False)

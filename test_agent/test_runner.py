@@ -31,6 +31,7 @@ from test_agent.config import config
 from test_agent.models import TestCase, ECTest, TestStep
 from test_agent.register_custom_actions import register_custom_actions
 from test_agent.scripts.browser_focus_manager import BrowserFocusManager
+from test_agent.scripts.windows_helper import kill_edge_processes
 
 
 def build_task_from_steps(steps: list[TestStep]) -> str:
@@ -53,7 +54,7 @@ async def run_test_case(
 	test: TestCase,
 	trigger_id: str,
 	run_id: int,
-	focus_manager: Optional[BrowserFocusManager] = None
+	focus_manager: Optional[BrowserFocusManager] = None,
 ) -> bool:
 	"""Execute a test case using Claude.
 
@@ -185,17 +186,20 @@ async def run_test_case(
 		print(f"\n[FAIL] Error running test: {str(e)}")
 		import traceback
 		traceback.print_exc()
+		# Kill Edge in case it didn't close cleanly after the exception
+		print("[Cleanup] Killing Edge processes after exception...")
+		kill_edge_processes()
 		return False
 
 
 def load_test_file(test_file: str) -> ECTest:
-	"""Load test case from JSON file.
+	"""Load test case from JSON file, resolving any shared_steps refs inline.
 
 	Args:
 		test_file: Path to test JSON file
 
 	Returns:
-		ECTest object
+		ECTest object with all steps fully resolved (no refs remain)
 
 	Raises:
 		FileNotFoundError: If test file not found
@@ -211,7 +215,26 @@ def load_test_file(test_file: str) -> ECTest:
 	with open(test_path, 'r', encoding='utf-8') as f:
 		test_data = json.load(f)
 
-	return ECTest(**test_data)
+	ec_test = ECTest(**test_data)
+
+	# Resolve shared_steps refs: replace each ref-step with the actual shared step inline
+	if ec_test.shared_steps:
+		for test_case in ec_test.test_cases:
+			resolved = []
+			for step in test_case.steps:
+				if step.ref is not None:
+					assert step.ref in ec_test.shared_steps, (
+						f"[{test_case.test_case_name}] Step ref '{step.ref}' not found in shared_steps. "
+						f"Available: {list(ec_test.shared_steps.keys())}"
+					)
+					resolved.append(ec_test.shared_steps[step.ref])
+				else:
+					resolved.append(step)
+			test_case.steps = resolved
+		# Clear shared_steps so callers never see unresolved refs
+		ec_test.shared_steps = None
+
+	return ec_test
 
 
 async def run_test_file(
@@ -219,7 +242,8 @@ async def run_test_file(
 	llm: Any,
 	trigger_id: str = "manual",
 	run_id: int = 1,
-	enable_focus_manager: bool = False
+	enable_focus_manager: bool = False,
+	test_case_filter: Optional[str] = None,
 ) -> bool:
 	"""Run tests from a test file.
 
@@ -250,12 +274,17 @@ async def run_test_file(
 	# Run tests
 	results = []
 	for test_case in ec_test.test_cases:
+		# Apply test case name filter if specified
+		if test_case_filter and test_case_filter.lower() not in test_case.test_case_name.lower():
+			print(f"\n[Filter] Skipping: {test_case.test_case_name}")
+			continue
+
 		success = await run_test_case(
 			llm,
 			test_case,
 			trigger_id,
 			run_id,
-			focus_manager  # Pass focus manager to test case
+			focus_manager,
 		)
 
 		results.append({
@@ -328,8 +357,21 @@ async def main():
 		action="store_true",
 		help="Disable browser focus management (browser won't stay TOPMOST by default)"
 	)
+	parser.add_argument(
+		"--test-case",
+		default=None,
+		help="Only run test cases whose name contains this substring (case-insensitive)"
+	)
 
 	args = parser.parse_args()
+
+	# Kill all Edge processes before starting (ensures clean state)
+	print("\n[Init] Killing Edge processes before starting...")
+	processes_killed = kill_edge_processes()
+	if processes_killed:
+		import time
+		print("[Init] Waiting 2 seconds for cleanup to complete...")
+		time.sleep(2)
 
 	# Initialize proxy pool if requested
 	if args.use_proxy_pool:
@@ -386,7 +428,8 @@ async def main():
 			llm,
 			args.trigger_id,
 			args.run_id,
-			enable_focus_manager=enable_focus_manager  # Enabled by default
+			enable_focus_manager=enable_focus_manager,
+			test_case_filter=args.test_case,
 		)
 		if not success:
 			all_success = False

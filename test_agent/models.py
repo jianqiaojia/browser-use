@@ -46,10 +46,15 @@ class TestCaseReplayStep(BaseModel):
             action.print()
 
 class TestStep(BaseModel):
-    """单个测试步骤"""
-    step_name: str
-    step_description: str
-    expected_result: str
+    """单个测试步骤.
+
+    可以是完整步骤，也可以通过 ref 引用同一 ECTest.shared_steps 字典中的共享步骤。
+    有 ref 时，step_name/step_description/expected_result 可省略（由 shared_steps 提供）。
+    """
+    ref: Optional[str] = None          # 引用 shared_steps 中的 step id，存在时其余字段可省略
+    step_name: Optional[str] = None
+    step_description: Optional[str] = None
+    expected_result: Optional[str] = None
     
 class TestStepEncoder(JSONEncoder):
     """测试步骤的 JSON 编码器"""
@@ -88,6 +93,7 @@ class TestCase(BaseModel):
 class ECTest(BaseModel):
     """EC 测试集合"""
     domain: Optional[str] = None
+    shared_steps: Optional[Dict[str, TestStep]] = None  # step_id -> TestStep，供同文件内的 test cases 引用
     test_cases: list[TestCase] = []
 
 class SetSessionStorageAction(BaseModel):

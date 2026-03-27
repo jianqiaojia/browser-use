@@ -6,6 +6,10 @@
 # Azure AD 认证
 azure-identity>=1.21.0
 
+# Microsoft Graph API / MSAL (email verification code reading)
+msal>=1.28.0
+requests>=2.31.0
+
 # Windows UI Automation
 comtypes>=1.1.14
 

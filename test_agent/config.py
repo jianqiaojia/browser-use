@@ -28,9 +28,9 @@ TEST_CASE_DIR: Final[Path] = BASE_DIR / "test_case"
 EDGE_CANARY_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\\Microsoft\\Edge SxS\\Application\\msedge.exe'
 EDGE_STABLE_PATH: Final[str] = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 EDGE_USER_DATA_DIR: Final[str] = 'C:\\Users\\jianqiaojia\\xpay-edge-starter\\default-profile'
-EDGE_STABLE_USER_DATA_DIR: Final[str] = 'Q:\\tmp2'
+EDGE_STABLE_USER_DATA_DIR: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\\Microsoft\\Edge\\User Data'
 EDGE_LOG_FILE_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\xpay-edge-starter\\default-profile\\chrome_debug.log'
-EDGE_STABLE_LOG_FILE_PATH: Final[str] = 'Q:\\tmp2\\chrome_debug.log'
+EDGE_STABLE_LOG_FILE_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\\Microsoft\\Edge\\User Data\\chrome_debug.log'
 DEFAULT_PROFILE: Final[str] = 'Profile 2'
 WALLET_PANE_URL: Final[str] = 'edge://wallet-drawer/'
 ENABLE_FEATURES: Final[str] = ''
@@ -104,6 +104,7 @@ class TestAgentConfig:
             'args': [  # 新版使用 args 而不是 extra_chromium_args
                 '--enable-logging',
                 '--v=1',
+                '--disable-blink-features=AutomationControlled',
                 *([] if not self.enable_features else [self.enable_features]),
                 *([] if not self.disable_features else [self.disable_features])
             ],
