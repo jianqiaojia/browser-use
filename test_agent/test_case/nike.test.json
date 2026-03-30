@@ -40,6 +40,11 @@
             "step_name": "Wait for autofill completion via log monitor",
             "step_description": "Call logmonitor_wait_for_state with expected_state='AutofillSucceeded' and timeout=30 to confirm autofill completed.",
             "expected_result": "State 'AutofillSucceeded' detected in Edge log."
+        },
+        "verify_profile_filtered": {
+            "step_name": "Verify invalid profiles are filtered",
+            "step_description": "Call logmonitor_get_filter_results. Check that all invalid profiles are FILTERED with a non-zero failed_reason, and at least one profile is VALID.",
+            "expected_result": "All invalid profiles FILTERED with non-zero failed_reason. At least 1 profile VALID."
         }
     },
     "test_cases": [
@@ -63,13 +68,14 @@
         },
         {
             "test_case_name": "Nike_autofill_Signed_In",
-            "test_case_description": "Sign in to Nike with a registered account, then navigate to checkout and trigger autofill popup. Preconditions: Edge browser has at least one saved address. Account: happyautoec@outlook.com / Happy@1234",
+            "test_case_description": "Sign in to Nike with a registered account, navigate to checkout, trigger autofill popup, verify invalid profiles are filtered, then complete autofill. Account: happyautoec@outlook.com / Happy@1234. Preconditions: (1) Edge has at least one fully valid saved address. (2) Edge also has 5 additional saved address profiles each with exactly one invalid field and all other fields valid: name='1', zip='1', phone='1', invalid email format (e.g. 'e650628.g. 1'), city='1'.",
             "steps": [
                 { "ref": "sign_in" },
                 { "ref": "handle_cart" },
                 { "ref": "navigate_to_checkout" },
                 { "ref": "init_log_monitor" },
                 { "ref": "trigger_autofill_popup" },
+                { "ref": "verify_profile_filtered" },
                 { "ref": "uia_click_autofill" },
                 { "ref": "wait_autofill_log" }
             ],

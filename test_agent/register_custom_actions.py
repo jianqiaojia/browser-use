@@ -283,7 +283,6 @@ def register_custom_actions(tools: Tools):
     )
     async def uia_select_autofill(
         params: UIASelectAutofillModel,
-        browser_session: BrowserSession  # 新版参数
     ) -> ActionResult:
         """Click the autofill button via UIA Helper to trigger autofill"""
         print(f'⚡ Clicking autofill button via UIA (profile_index: {params.profile_index}, payment_index: {params.payment_index})...')
@@ -317,6 +316,160 @@ def register_custom_actions(tools: Tools):
             print(msg)
             return ActionResult(error=msg, include_in_memory=True, success=False)
     
+    # @tools.action(
+    #     description='Verify that all profiles shown in the autofill popup are valid.',
+    # )
+    # async def uia_verify_popup_profiles(browser_session: BrowserSession) -> ActionResult:
+    #     """Check that no invalid profiles are shown in the autofill popup."""
+    #     import sqlite3, os as _os, re as _re
+    #     print('🔍 Verifying popup profiles (UIA + DB cross-check)...')
+    #     try:
+    #         # --- Step 1: read popup profiles via UIA ---
+    #         uia_result = uia_helper.get_popup_profile_names()
+    #         if not uia_result.get('success'):
+    #             msg = f'❌ UIA failed to read popup: {uia_result.get("error")}'
+    #             print(msg)
+    #             return ActionResult(error=msg, include_in_memory=True, success=False)
+    #
+    #         popup_profiles = uia_result['profiles']
+    #         print(f'  UIA: {len(popup_profiles)} profile(s) in popup')
+    #
+    #         # --- Step 2: load all addresses from Edge Web Data ---
+    #         web_data_path = _os.path.join(config.user_data_dir, config.profile, 'Web Data')
+    #         db_profiles: dict[str, dict] = {}
+    #         if _os.path.exists(web_data_path):
+    #             try:
+    #                 conn = sqlite3.connect(f'file:{web_data_path}?mode=ro&immutable=1', uri=True)
+    #                 FIELD_TYPES = {3: 'name', 9: 'email', 14: 'phone', 35: 'zip', 22: 'city'}
+    #                 rows = conn.execute(
+    #                     'SELECT guid, type, value FROM address_type_tokens WHERE type IN (3,9,14,35,22)'
+    #                 ).fetchall()
+    #                 conn.close()
+    #                 for guid, type_code, value in rows:
+    #                     if guid not in db_profiles:
+    #                         db_profiles[guid] = {}
+    #                     db_profiles[guid][FIELD_TYPES[type_code]] = value or ''
+    #             except Exception as db_err:
+    #                 print(f'  DB lookup error: {db_err}')
+    #
+    #         # --- Step 3: validity check helpers ---
+    #         def _is_invalid_name(v: str) -> bool:
+    #             return len(v.strip()) <= 2 or v.strip().isdigit()
+    #         def _is_invalid_zip(v: str) -> bool:
+    #             return len(v.strip()) <= 2 or v.strip().isdigit() and len(v.strip()) < 4
+    #         def _is_invalid_phone(v: str) -> bool:
+    #             digits = _re.sub(r'\D', '', v)
+    #             return len(digits) < 7
+    #         def _is_invalid_email(v: str) -> bool:
+    #             return not _re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', v.strip())
+    #         def _is_invalid_city(v: str) -> bool:
+    #             return len(v.strip()) <= 2 or v.strip().isdigit()
+    #         def _check_profile(fields: dict) -> list[str]:
+    #             issues = []
+    #             if _is_invalid_name(fields.get('name', '')):
+    #                 issues.append(f"name={repr(fields.get('name', ''))}")
+    #             if fields.get('zip') and _is_invalid_zip(fields.get('zip', '')):
+    #                 issues.append(f"zip={repr(fields.get('zip', ''))}")
+    #             if fields.get('phone') and _is_invalid_phone(fields.get('phone', '')):
+    #                 issues.append(f"phone={repr(fields.get('phone', ''))}")
+    #             if fields.get('email') and _is_invalid_email(fields.get('email', '')):
+    #                 issues.append(f"email={repr(fields.get('email', ''))}")
+    #             if fields.get('city') and _is_invalid_city(fields.get('city', '')):
+    #                 issues.append(f"city={repr(fields.get('city', ''))}")
+    #             return issues
+    #
+    #         # --- Step 4: get log monitor summary ---
+    #         log_monitor_available = (
+    #             hasattr(browser_session, '_custom_data')
+    #             and 'log_monitor' in browser_session._custom_data
+    #         )
+    #         filtered_guids: set[str] = set()
+    #         valid_guids: set[str] = set()
+    #         if log_monitor_available:
+    #             monitor = browser_session._custom_data['log_monitor']
+    #             monitor.check_new_states()
+    #             summary = monitor.get_filter_summary()
+    #             filtered_guids = set(summary['failed'].keys())
+    #             valid_guids = set(summary['valid'])
+    #
+    #         guid_to_name: dict[str, str] = {
+    #             guid: fields.get('name', '').strip()
+    #             for guid, fields in db_profiles.items()
+    #             if fields.get('name', '').strip()
+    #         }
+    #
+    #         # --- Step 5: match popup buttons to DB guids ---
+    #         def _match_guid(raw: str) -> str | None:
+    #             raw_lower = raw.lower()
+    #             candidates = valid_guids if valid_guids else set(guid_to_name.keys())
+    #             for guid in candidates:
+    #                 name = guid_to_name.get(guid, '').lower()
+    #                 if name and name in raw_lower:
+    #                     return guid
+    #             for guid, name in guid_to_name.items():
+    #                 if name.lower() in raw_lower:
+    #                     return guid
+    #             return None
+    #
+    #         invalid_shown: list[str] = []
+    #         valid_shown: list[str] = []
+    #         skipped: list[str] = []
+    #         for raw in popup_profiles:
+    #             matched_guid = _match_guid(raw)
+    #             if matched_guid is None:
+    #                 skipped.append(f'  ⏭  skipped (no DB match): {raw[:60]!r}')
+    #                 print(skipped[-1])
+    #                 continue
+    #             db_fields = db_profiles[matched_guid]
+    #             issues = _check_profile(db_fields)
+    #             guid_str = matched_guid[:8] + '...'
+    #             if matched_guid in filtered_guids:
+    #                 reason = summary['failed'][matched_guid] if log_monitor_available else '?'
+    #                 msg_line = f'  ❌ INVALID (log filtered) guid={guid_str} reason={reason} name={repr(db_fields.get("name",""))}'
+    #                 print(msg_line)
+    #                 invalid_shown.append(msg_line)
+    #             elif issues:
+    #                 msg_line = f'  ❌ INVALID (DB check) guid={guid_str} issues: {", ".join(issues)}'
+    #                 print(msg_line)
+    #                 invalid_shown.append(msg_line)
+    #             else:
+    #                 msg_line = f'  ✅ valid  guid={guid_str} name={repr(db_fields.get("name", ""))}'
+    #                 print(msg_line)
+    #                 valid_shown.append(msg_line)
+    #
+    #         # --- Step 6: log/UIA cross-check ---
+    #         log_cross_check = ''
+    #         if log_monitor_available:
+    #             popup_matched_guids = {_match_guid(raw) for raw in popup_profiles} - {None}
+    #             leaked_filtered = filtered_guids & popup_matched_guids
+    #             missing_valid = valid_guids - popup_matched_guids
+    #             if leaked_filtered:
+    #                 log_cross_check += f'\n  ⚠️  LOG/UIA MISMATCH: log filtered but shown in popup: {leaked_filtered}'
+    #             if missing_valid:
+    #                 log_cross_check += f'\n  ℹ️  Log-valid guid(s) not found in popup: {missing_valid}'
+    #             if not leaked_filtered and not missing_valid:
+    #                 log_cross_check += f'\n  ✅ Log/UIA consistent: {len(filtered_guids)} filtered, {len(valid_guids)} valid'
+    #
+    #         # --- Final verdict ---
+    #         if invalid_shown:
+    #             msg = (f'❌ FAIL: {len(invalid_shown)} invalid profile(s) shown in popup:\n'
+    #                    + '\n'.join(invalid_shown)
+    #                    + (f'\n{log_cross_check}' if log_cross_check else ''))
+    #             print(msg)
+    #             return ActionResult(error=msg, include_in_memory=True, success=False)
+    #         else:
+    #             msg = (f'✅ PASS: {len(valid_shown)} profile(s) in popup, all valid.\n'
+    #                    + '\n'.join(valid_shown)
+    #                    + (f'\n{log_cross_check}' if log_cross_check else ''))
+    #             print(msg)
+    #             return ActionResult(extracted_content=msg, include_in_memory=True)
+    #
+    #     except Exception as e:
+    #         msg = f'❌ Error in uia_verify_popup_profiles: {str(e)}'
+    #         print(msg)
+    #         import traceback; traceback.print_exc()
+    #         return ActionResult(error=msg, include_in_memory=True, success=False)
+
     @tools.action(
         description='Initialize log file monitor for tracking browser state changes. Call this before the action you want to monitor.',
     )
@@ -428,6 +581,74 @@ def register_custom_actions(tools: Tools):
             return ActionResult(extracted_content=msg, include_in_memory=True)
             
         except Exception as e:
+            return ActionResult(error=msg, include_in_memory=True, success=False)
+
+    @tools.action(
+        description='Get profile filter results from the log monitor. Returns each profile GUID that was evaluated, whether it passed or failed the filter, the failed reason code, and the profile field details (name, email, phone, zip, city) looked up from the Edge address database. Call logmonitor_init first, then trigger the autofill popup, then call this to see which profiles were filtered and why.',
+    )
+    async def logmonitor_get_filter_results(browser_session: BrowserSession) -> ActionResult:
+        """Read profile filter events from log and enrich with field data from Edge Web Data DB."""
+        import sqlite3, os as _os
+        try:
+            if not hasattr(browser_session, '_custom_data') or 'log_monitor' not in browser_session._custom_data:
+                msg = '❌ Log monitor not initialized. Call logmonitor_init first.'
+                return ActionResult(error=msg, include_in_memory=True, success=False)
+
+            monitor = browser_session._custom_data['log_monitor']
+            # Flush any unread log lines
+            monitor.check_new_states()
+            summary = monitor.get_filter_summary()
+
+            failed: dict = summary['failed']   # {guid: failed_reason}
+            valid: list  = summary['valid']    # [guid, ...]
+
+            if not failed and not valid:
+                msg = 'No profile filter events found in log. Make sure --vmodule=shipping_address_form=2 is set and the popup was triggered.'
+                return ActionResult(extracted_content=msg, include_in_memory=True)
+
+            # Look up profile field details from Edge Web Data (copy to avoid lock)
+            web_data_path = _os.path.join(
+                config.user_data_dir, config.profile, 'Web Data'
+            )
+            profile_details: dict[str, dict] = {}
+            if _os.path.exists(web_data_path):
+                try:
+                    conn = sqlite3.connect(f'file:{web_data_path}?mode=ro&immutable=1', uri=True)
+                    # type codes: 3=full_name, 9=email, 14=phone, 35=zip, 22=city
+                    FIELD_TYPES = {3: 'name', 9: 'email', 14: 'phone', 35: 'zip', 22: 'city'}
+                    all_guids = list(failed.keys()) + valid
+                    placeholders = ','.join('?' * len(all_guids))
+                    rows = conn.execute(
+                        f'SELECT guid, type, value FROM address_type_tokens WHERE guid IN ({placeholders}) AND type IN (3,9,14,35,22)',
+                        all_guids
+                    ).fetchall()
+                    conn.close()
+                    for guid, type_code, value in rows:
+                        if guid not in profile_details:
+                            profile_details[guid] = {}
+                        field = FIELD_TYPES.get(type_code, str(type_code))
+                        profile_details[guid][field] = value
+                except Exception as db_err:
+                    print(f'[filter_results] DB lookup error: {db_err}')
+
+            # Build report
+            lines = []
+            for guid, reason in failed.items():
+                fields = profile_details.get(guid, {})
+                fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
+                lines.append(f'  ❌ FILTERED  guid={guid}  reason={reason}  fields: {fields_str}')
+            for guid in valid:
+                fields = profile_details.get(guid, {})
+                fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
+                lines.append(f'  ✅ VALID     guid={guid}  fields: {fields_str}')
+
+            msg = f'Profile filter results ({len(failed)} filtered, {len(valid)} valid):\n' + '\n'.join(lines)
+            print(msg)
+            return ActionResult(extracted_content=msg, include_in_memory=True)
+
+        except Exception as e:
+            msg = f'❌ Error getting filter results: {str(e)}'
+            print(msg)
             return ActionResult(error=msg, include_in_memory=True, success=False)
 
     @tools.action(

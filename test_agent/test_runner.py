@@ -1,8 +1,7 @@
 """
-Test runner using Claude Sonnet via MicrosoftAI LLM Proxy
+Test runner using Claude Opus via MicrosoftAI LLM Proxy
 
 Auto-discovers and runs all *.test.json files in test_case/ directory.
-Uses Claude Sonnet instead of Azure OpenAI for better JSON output reliability.
 """
 import asyncio
 import json
@@ -26,7 +25,7 @@ import test_agent.llm.litellm_patch  # noqa: F401
 
 from browser_use import Agent, BrowserProfile
 from browser_use.agent.views import MessageCompactionSettings
-from test_agent.llm.llm_config import get_claude_sonnet
+from test_agent.llm.llm_config import get_claude_sonnet as get_claude
 from test_agent.config import config
 from test_agent.models import TestCase, ECTest, TestStep
 from test_agent.register_custom_actions import register_custom_actions
@@ -98,7 +97,7 @@ async def run_test_case(
 		register_custom_actions(tools)
 
 		# Create and run Agent with pre-configured tools
-		print("[Agent] Creating agent with Claude Sonnet...")
+		print("[Agent] Creating agent with Claude Opus...")
 		agent = Agent(
 			task=task,
 			llm=llm,
@@ -333,7 +332,7 @@ async def main():
 	)
 	parser.add_argument(
 		"--model",
-		default="claude-sonnet-4-5",
+		default="claude-opus-4-5",
 		help="Claude model name (default: claude-sonnet-4-5)"
 	)
 	parser.add_argument(
@@ -385,11 +384,11 @@ async def main():
 			print(f"  [WARN] Proxy pool initialization failed, continuing without proxies")
 
 	# Initialize Claude LLM
-	print("\n[Init] Initializing Claude Sonnet via MicrosoftAI LLM Proxy...")
+	print("\n[Init] Initializing Claude Opus via MicrosoftAI LLM Proxy...")
 	print(f"  Model: {args.model}")
 	print(f"  Proxy: {args.proxy}")
 
-	llm = get_claude_sonnet(
+	llm = get_claude(
 		model=args.model,
 		base_url=args.proxy,
 	)

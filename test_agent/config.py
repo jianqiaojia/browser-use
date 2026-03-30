@@ -32,7 +32,6 @@ EDGE_STABLE_USER_DATA_DIR: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\
 EDGE_LOG_FILE_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\xpay-edge-starter\\default-profile\\chrome_debug.log'
 EDGE_STABLE_LOG_FILE_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\\Microsoft\\Edge\\User Data\\chrome_debug.log'
 DEFAULT_PROFILE: Final[str] = 'Profile 2'
-WALLET_PANE_URL: Final[str] = 'edge://wallet-drawer/'
 ENABLE_FEATURES: Final[str] = ''
 DISABLE_FEATURES: Final[str] = ''
 
@@ -64,7 +63,6 @@ class TestAgentConfig:
         self.user_data_dir = EDGE_STABLE_USER_DATA_DIR
         self.log_file_path = EDGE_STABLE_LOG_FILE_PATH
         self.profile = DEFAULT_PROFILE
-        self.wallet_pane_url = WALLET_PANE_URL
         self.enable_features = ENABLE_FEATURES
         self.disable_features = DISABLE_FEATURES
         
@@ -103,7 +101,7 @@ class TestAgentConfig:
             'profile_directory': self.profile,  # 新版使用 profile_directory
             'args': [  # 新版使用 args 而不是 extra_chromium_args
                 '--enable-logging',
-                '--v=1',
+                '--vmodule=native_wallet_checkout_manager=1,shipping_address_form=2',
                 '--disable-blink-features=AutomationControlled',
                 *([] if not self.enable_features else [self.enable_features]),
                 *([] if not self.disable_features else [self.disable_features])

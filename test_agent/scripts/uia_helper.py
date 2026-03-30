@@ -391,6 +391,37 @@ class UIAHelper:
             print(f"Error invoking element: {e}")
             return False
     
+    def get_popup_profile_names(self, verbose: bool = True) -> Dict[str, Any]:
+        """
+        获取 autofill 弹窗中所有 profile 选项的名称列表。
+        用于验证某个 profile 是否被过滤掉（不出现在弹窗中）。
+
+        Returns:
+            {'success': True, 'profiles': ['Ming Peng ...', ...]} 或 {'success': False, 'error': ...}
+        """
+        vprint = print if verbose else lambda *_: None
+        try:
+            popup = self.get_popup_element(verbose=False)
+            if popup is None:
+                return {'success': False, 'error': 'Popup not found'}
+
+            option_buttons = self.find_option_buttons(popup, verbose=False)
+            profiles = []
+            for btn in option_buttons:
+                try:
+                    name = btn.CurrentName
+                    if name and 'Contact info' in name:
+                        profiles.append(name)
+                        vprint(f"  Profile: '{name[:100]}'")
+                except Exception as e:
+                    print(f"  Error reading profile name: {e}")
+
+            vprint(f"[get_popup_profile_names] Found {len(profiles)} profiles")
+            return {'success': True, 'profiles': profiles}
+
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
+
     def select_and_confirm(self, profile_index: int = 0, payment_index: int = 0) -> Dict[str, Any]:
         """
         选择地址/支付方式并确认
