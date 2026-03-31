@@ -5,6 +5,7 @@ Log File Monitor - 监控 Chrome/Edge 日志文件
 
 import os
 import re
+import time
 from typing import Optional, List, Dict
 
 
@@ -111,3 +112,103 @@ class LogFileMonitor:
             e['guid'] for e in self.profile_filter_history if e['type'] == 'profile_valid'
         ))
         return {'failed': failed, 'valid': valid}
+
+    async def wait_for_state(self, expected_state: str, timeout: float = 30.0) -> Dict:
+        """Poll log until expected_state appears or timeout expires.
+
+        Returns:
+            {'success': True, 'elapsed': float}
+            {'success': False, 'elapsed': float, 'check_count': int, 'states_seen': list}
+        """
+        import asyncio
+        start = time.time()
+        check_count = 0
+        while (time.time() - start) < timeout:
+            check_count += 1
+            for event in self.check_new_states():
+                if event['type'] == 'autofill_state':
+                    print(f"🔔 [{event['timestamp_str']}] State: {event['state_name']}")
+                if event.get('state_name') == expected_state:
+                    return {'success': True, 'elapsed': time.time() - start}
+            await asyncio.sleep(0.5)
+        return {
+            'success': False,
+            'elapsed': time.time() - start,
+            'check_count': check_count,
+            'states_seen': [s['state_name'] for s in self.states_history],
+        }
+
+    def get_filter_report(self, web_data_path: str) -> Dict:
+        """Flush log, query Edge Web Data DB, return structured report.
+
+        Returns:
+            {
+                'empty': bool,                        # True = no filter events found
+                'failed': {guid: reason_int},
+                'valid': [guid],
+                'profile_details': {guid: {field: value}},
+                'report_lines': [str],                # pre-formatted lines, join to build message
+            }
+        """
+        import sqlite3
+
+        self.check_new_states()
+        summary = self.get_filter_summary()
+        failed: Dict = summary['failed']
+        valid: List = summary['valid']
+
+        if not failed and not valid:
+            return {'empty': True, 'failed': {}, 'valid': [], 'profile_details': {}, 'report_lines': []}
+
+        FIELD_TYPES = {3: 'name', 9: 'email', 14: 'phone', 35: 'zip', 22: 'city'}
+        REASON_NAMES = {
+            23: 'INVALID_PROFILE_FIRSTNAME',
+            24: 'INVALID_PROFILE_LASTNAME',
+            25: 'INVALID_PROFILE_FULLNAME',
+            26: 'INVALID_PROFILE_EMAIL',
+            27: 'INVALID_PROFILE_PHONE',
+            28: 'INVALID_PROFILE_COUNTRY',
+            29: 'INVALID_PROFILE_STREET_ADDRESS',
+            30: 'INVALID_PROFILE_CITY',
+            31: 'INVALID_PROFILE_ZIP',
+            32: 'INVALID_PROFILE_STATE',
+            33: 'INVALID_PROFILE_ADDRESS_MAPPING',
+            34: 'NO_PROFILE',
+            35: 'INSUFFICIENT_PROFILE_FIELDS',
+        }
+
+        profile_details: Dict[str, Dict] = {}
+        if os.path.exists(web_data_path):
+            try:
+                all_guids = list(failed.keys()) + valid
+                placeholders = ','.join('?' * len(all_guids))
+                conn = sqlite3.connect(f'file:{web_data_path}?mode=ro&immutable=1', uri=True)
+                rows = conn.execute(
+                    f'SELECT guid, type, value FROM address_type_tokens '
+                    f'WHERE guid IN ({placeholders}) AND type IN (3,9,14,35,22)',
+                    all_guids
+                ).fetchall()
+                conn.close()
+                for guid, type_code, value in rows:
+                    profile_details.setdefault(guid, {})[FIELD_TYPES.get(type_code, str(type_code))] = value
+            except Exception as db_err:
+                print(f'[filter_report] DB lookup error: {db_err}')
+
+        lines = []
+        for guid, reason in failed.items():
+            fields = profile_details.get(guid, {})
+            fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
+            reason_label = f'{reason}({REASON_NAMES.get(reason, "?")})'
+            lines.append(f'  ⚪ FILTERED  guid={guid}  reason={reason_label}  fields: {fields_str}')
+        for guid in valid:
+            fields = profile_details.get(guid, {})
+            fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
+            lines.append(f'  ✅ VALID     guid={guid}  fields: {fields_str}')
+
+        return {
+            'empty': False,
+            'failed': failed,
+            'valid': valid,
+            'profile_details': profile_details,
+            'report_lines': lines,
+        }

@@ -38,6 +38,9 @@ class GetEmailVerificationCodeModel(BaseModel):
     subject_filter: str = ""
     timeout_seconds: int = 60
 
+class SetSessionStorageAction(BaseModel):
+    key: str
+    value: str
 
 def register_custom_actions(tools: Tools):
     """Register custom actions for test automation."""
@@ -382,51 +385,29 @@ def register_custom_actions(tools: Tools):
     )
     async def logmonitor_wait_for_state(
         params: LogMonitorWaitForStateModel,
-        browser_session: BrowserSession  # 新版参数
+        browser_session: BrowserSession
     ) -> ActionResult:
         """Wait for checkout state to reach expected value by monitoring log file"""
         try:
-            print(f'⏳ Waiting for checkout state: {params.expected_state} (timeout: {params.timeout}s)...')
-            
-            # 检查监视器是否初始化
             if not hasattr(browser_session, '_custom_data') or 'log_monitor' not in browser_session._custom_data:
                 msg = '❌ Log monitor not initialized. Call logmonitor_init first.'
                 print(msg)
                 return ActionResult(error=msg, include_in_memory=True, success=False)
-            
+
+            print(f'⏳ Waiting for checkout state: {params.expected_state} (timeout: {params.timeout}s)...')
             monitor = browser_session._custom_data['log_monitor']
-            start_time = time.time()
-            check_count = 0
-            
-            while (time.time() - start_time) < params.timeout:
-                check_count += 1
-                elapsed = time.time() - start_time
-                
-                # Check for new states in log
-                new_states = monitor.check_new_states()
-                
-                if new_states:
-                    for state in new_states:
-                        print(f"🔔 [{state['timestamp_str']}] State: {state['state_name']}")
-                        
-                        # Check if this is the expected state
-                        if state['state_name'] == params.expected_state:
-                            msg = f'✅ Checkout state reached {params.expected_state} after {elapsed:.1f}s'
-                            print(msg)
-                            return ActionResult(
-                                extracted_content=msg,
-                                include_in_memory=True,
-                            )
-                
-                await asyncio.sleep(0.5)
-            
-            # Timeout
-            elapsed = time.time() - start_time
-            states_history = [s['state_name'] for s in monitor.states_history]
-            msg = f'❌ Timeout: Expected state {params.expected_state} not reached after {elapsed:.1f}s (checked {check_count} times). States: {states_history}'
-            print(msg)
-            return ActionResult(error=msg, include_in_memory=True, success=False)
-            
+            result = await monitor.wait_for_state(params.expected_state, params.timeout)
+
+            if result['success']:
+                msg = f'✅ Checkout state reached {params.expected_state} after {result["elapsed"]:.1f}s'
+                print(msg)
+                return ActionResult(extracted_content=msg, include_in_memory=True)
+            else:
+                msg = (f'❌ Timeout: {params.expected_state} not reached after {result["elapsed"]:.1f}s '
+                       f'(checked {result["check_count"]} times). States: {result["states_seen"]}')
+                print(msg)
+                return ActionResult(error=msg, include_in_memory=True, success=False)
+
         except Exception as e:
             msg = f'❌ Failed to wait for checkout state: {str(e)}'
             print(msg)
@@ -455,86 +436,28 @@ def register_custom_actions(tools: Tools):
             return ActionResult(extracted_content=msg, include_in_memory=True)
             
         except Exception as e:
-            return ActionResult(error=msg, include_in_memory=True, success=False)
+            return ActionResult(error=f'❌ Error reading state history: {str(e)}', include_in_memory=True, success=False)
 
     @tools.action(
         description='Get profile filter results from the log monitor. Returns each profile GUID that was evaluated, whether it passed or failed the filter, the failed reason code, and the profile field details (name, email, phone, zip, city) looked up from the Edge address database. Call logmonitor_init first, then trigger the autofill popup, then call this to see which profiles were filtered and why.',
     )
     async def logmonitor_get_filter_results(browser_session: BrowserSession) -> ActionResult:
         """Read profile filter events from log and enrich with field data from Edge Web Data DB."""
-        import sqlite3, os as _os
         try:
             if not hasattr(browser_session, '_custom_data') or 'log_monitor' not in browser_session._custom_data:
                 msg = '❌ Log monitor not initialized. Call logmonitor_init first.'
                 return ActionResult(error=msg, include_in_memory=True, success=False)
 
             monitor = browser_session._custom_data['log_monitor']
-            # Flush any unread log lines
-            monitor.check_new_states()
-            summary = monitor.get_filter_summary()
+            web_data_path = os.path.join(config.user_data_dir, config.profile, 'Web Data')
+            result = monitor.get_filter_report(web_data_path)
 
-            failed: dict = summary['failed']   # {guid: failed_reason}
-            valid: list  = summary['valid']    # [guid, ...]
-
-            if not failed and not valid:
+            if result['empty']:
                 msg = 'No profile filter events found in log. Make sure --vmodule=shipping_address_form=2 is set and the popup was triggered.'
                 return ActionResult(extracted_content=msg, include_in_memory=True)
 
-            # Look up profile field details from Edge Web Data (copy to avoid lock)
-            web_data_path = _os.path.join(
-                config.user_data_dir, config.profile, 'Web Data'
-            )
-            profile_details: dict[str, dict] = {}
-            if _os.path.exists(web_data_path):
-                try:
-                    conn = sqlite3.connect(f'file:{web_data_path}?mode=ro&immutable=1', uri=True)
-                    # type codes: 3=full_name, 9=email, 14=phone, 35=zip, 22=city
-                    FIELD_TYPES = {3: 'name', 9: 'email', 14: 'phone', 35: 'zip', 22: 'city'}
-                    all_guids = list(failed.keys()) + valid
-                    placeholders = ','.join('?' * len(all_guids))
-                    rows = conn.execute(
-                        f'SELECT guid, type, value FROM address_type_tokens WHERE guid IN ({placeholders}) AND type IN (3,9,14,35,22)',
-                        all_guids
-                    ).fetchall()
-                    conn.close()
-                    for guid, type_code, value in rows:
-                        if guid not in profile_details:
-                            profile_details[guid] = {}
-                        field = FIELD_TYPES.get(type_code, str(type_code))
-                        profile_details[guid][field] = value
-                except Exception as db_err:
-                    print(f'[filter_results] DB lookup error: {db_err}')
-
-            # Source: TriggerFailedReason in wallet_checkout_trigger_funnel_manager.h
-            REASON_NAMES = {
-                23: 'INVALID_PROFILE_FIRSTNAME',
-                24: 'INVALID_PROFILE_LASTNAME',
-                25: 'INVALID_PROFILE_FULLNAME',
-                26: 'INVALID_PROFILE_EMAIL',
-                27: 'INVALID_PROFILE_PHONE',
-                28: 'INVALID_PROFILE_COUNTRY',
-                29: 'INVALID_PROFILE_STREET_ADDRESS',
-                30: 'INVALID_PROFILE_CITY',
-                31: 'INVALID_PROFILE_ZIP',
-                32: 'INVALID_PROFILE_STATE',
-                33: 'INVALID_PROFILE_ADDRESS_MAPPING',
-                34: 'NO_PROFILE',
-                35: 'INSUFFICIENT_PROFILE_FIELDS',
-            }
-
-            # Build report
-            lines = []
-            for guid, reason in failed.items():
-                fields = profile_details.get(guid, {})
-                fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
-                reason_label = f'{reason}({REASON_NAMES.get(reason, "?")})'
-                lines.append(f'  ⚪ FILTERED  guid={guid}  reason={reason_label}  fields: {fields_str}')
-            for guid in valid:
-                fields = profile_details.get(guid, {})
-                fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
-                lines.append(f'  ✅ VALID     guid={guid}  fields: {fields_str}')
-
-            msg = f'Profile filter results ({len(failed)} filtered, {len(valid)} valid):\n' + '\n'.join(lines)
+            msg = (f'Profile filter results ({len(result["failed"])} filtered, {len(result["valid"])} valid):\n'
+                   + '\n'.join(result['report_lines']))
             print(msg)
             return ActionResult(extracted_content=msg, include_in_memory=True)
 

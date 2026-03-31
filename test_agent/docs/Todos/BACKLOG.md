@@ -1,0 +1,64 @@
+# Backlog
+
+优先级从上到下，同优先级按编号排。
+
+---
+
+## P0 — 立即需要
+
+### 0. Azure VM 部署 + POC 验证
+在 Azure 上部署 Windows VM，跑通完整测试流程，验证云端可行性。
+
+### 0. 解决无人值守问题
+当前测试需要保持远程桌面连接（RDP/VNC），会话断开后浏览器失去焦点导致失败。
+目标：测试全程无需人工在线，支持计划任务或 CI 触发后自动完成。
+- 候选方案：虚拟显示（XVFB / Windows headless）、后台服务化、Windows Task Scheduler
+
+---
+
+## P1 — 近期
+
+### 1. 提高鲁棒性 / 验证 corner case
+当前只跑了主流程，需要覆盖更多边界情况：
+- 购物车为空 / 有不可用商品
+- Nike 要求邮箱验证码而非密码
+- autofill popup 不出现的 fallback
+- 网络慢 / 页面加载超时
+- replay 回放元素找不到时的续跑
+
+### 2. 标准化 test case 模板 + Tricks 文档
+- `*.test.json` 编写规范（task_preamble、shared_steps、params 用法）
+- 常见坑和 workaround（trigger field 选择、Edit 按钮展开、cdp_click vs os_click）
+- 新 site 接入 checklist
+
+### 3. 报警
+测试失败时发送通知（邮件 / Teams / Webhook），支持 CI 集成。
+- 失败摘要：test case 名、失败步骤、error message
+- 可选：附截图或 history.json 链接
+
+---
+
+## P2 — 待评估
+
+### 4. 切换回 GPT-4o
+当前用 Claude（通过 LiteLLM proxy），LiteLLM token 有超额风险。
+评估：GPT-4o 在 browser-use 场景下的准确率是否足够，token 成本对比。
+相关文件：`test_runner.py` `--model` 参数，`llm_config.py`
+
+### 5. 调研升级 browser-use 的必要性
+当前锁定在 v0.11.8，评估是否需要跟进上游版本：
+- 查看 changelog，确认是否有影响稳定性或 rerun_history 的 breaking change
+- 评估升级收益（新特性、bug fix）vs 迁移成本（API 变更、现有 patch 兼容性）
+- 重点关注：`Agent.rerun_history()`、`DOMInteractedElement`、`AgentHistoryList` 接口变化
+
+---
+
+## 持续进行
+
+### 5. 支持更多 site / test case
+Nike 稳定后逐步扩展到其他 checkout site。
+参考：`test_agent/skills/EC_TRIGGER_FIELD_SKILL.md` 获取新 site 的 trigger field。
+
+---
+
+**维护日期**：2026-03-31

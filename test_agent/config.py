@@ -40,6 +40,11 @@ MAX_ACTIONS_PER_STEP: Final[int] = 10  # 增大以减少 LLM 调用次数，提�
 MAX_STEPS: Final[int] = 50  # 增加以确保有足够步骤完成所有任务（原 20 步不够）
 VISION_ENABLED: Final[bool] = False
 
+# Replay Configuration
+RERUN_MAX_RETRIES: Final[int] = 2        # rerun 每步最大重试次数
+RERUN_DELAY_BETWEEN_ACTIONS: Final[float] = 1.0   # 每步之间固定等待秒数
+RERUN_MAX_STEP_INTERVAL: Final[float] = 2.0       # saved step_interval 上限（压缩LLM探索时的等待）
+
 # Test Filter Configuration
 DEFAULT_SITE_TYPE: Final[str] = "all"
 DEFAULT_PRIORITY: Final[int] = 1
@@ -70,6 +75,11 @@ class TestAgentConfig:
         self.max_actions_per_step = MAX_ACTIONS_PER_STEP
         self.max_steps = MAX_STEPS
         self.vision_enabled = VISION_ENABLED
+
+        # Replay settings
+        self.rerun_max_retries = RERUN_MAX_RETRIES
+        self.rerun_delay_between_actions = RERUN_DELAY_BETWEEN_ACTIONS
+        self.rerun_max_step_interval = RERUN_MAX_STEP_INTERVAL
         
         # Test settings
         self.default_site_type = DEFAULT_SITE_TYPE
