@@ -3,31 +3,20 @@ import os
 import sys
 import time
 import asyncio
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-# 新版导入
-from browser_use import Agent, BrowserSession, Tools
+from browser_use import BrowserSession, Tools
 from browser_use.agent.views import ActionResult
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pydantic import BaseModel
 
-from test_agent.models import SetSessionStorageAction
 from test_agent.config import config
 from test_agent.actions.os_click import register_os_click
 from test_agent.actions.cdp_click import register_cdp_click
 from test_agent.scripts.uia_helper import UIAHelper
 from test_agent.scripts.email_helper import async_get_baseline_entry_id, async_get_verification_code
-
-class LoginToMSA(BaseModel):
-    userName: str
-    password: str
-
-class BingSearchModel(BaseModel):
-    text: str
-    bingUrl: Optional[str] = None
 
 class UIASelectAutofillModel(BaseModel):
     profile_index: int = 0
@@ -51,13 +40,7 @@ class GetEmailVerificationCodeModel(BaseModel):
 
 
 def register_custom_actions(tools: Tools):
-    """Register custom actions for test automation.
-
-    MIGRATED to browser-use v0.11.8:
-    - Controller → Tools
-    - browser: BrowserContext → browser_session: BrowserSession
-    - 使用新版的 Agent API
-    """
+    """Register custom actions for test automation."""
 
     # Register os_click for real OS-level mouse clicks
     register_os_click(tools.registry)
@@ -68,115 +51,6 @@ def register_custom_actions(tools: Tools):
     # Initialize UIA Helper instance (shared across all actions)
     uia_helper = UIAHelper()
 
-    async def call_agent(
-        task: str,
-        browser_session: BrowserSession,  # 新版：BrowserSession
-        agent_llm: Any,
-        tools_instance: Tools,  # 传入 tools 以便嵌套 agent 使用
-    ) -> ActionResult:
-        """Helper function to call a sub-agent for complex tasks."""
-        agent = Agent(
-            task=task,
-            llm=agent_llm,
-            browser=browser_session,  # 新版：简化的 API
-            tools=tools_instance,
-            max_actions_per_step=4,
-            use_vision=False,  # 避免日志过多
-            # 新版功能
-            enable_planning=True,
-            loop_detection_enabled=True,
-        )
-        
-        ret = await agent.run(max_steps=20)
-
-        # 检查最后一个结果
-        if not ret.history:
-            return ActionResult(error="No history found", include_in_memory=True)
-        
-        last_result = ret.history[-1].result[-1]
-
-        return ActionResult(
-            extracted_content=last_result.extracted_content,
-            error=last_result.error,
-            include_in_memory=True,
-        )
-
-    @tools.action(
-        description="""Search on Bing for a specific query; if Bing url is specified, use that specified Url.
-        always use this tool for searching on **Bing** before considering others
-        """,
-        param_model=BingSearchModel
-    )
-    async def search_on_bing(
-        params: BingSearchModel,
-        browser_session: BrowserSession,  # 新版参数
-    ) -> ActionResult:
-        print('🔶🔶🔶 search_on_bing')
-        bingUrl = params.bingUrl if params.bingUrl is not None else 'https://www.bing.com'
-        
-        task = f"""
-            1. goto {bingUrl} if current url is not {bingUrl}
-            2. type "{params.text}" in the search bar
-            3. press enter 
-            """
-        
-        # 需要传入 tools 和 llm
-        # 注意：这需要从外部传入，或者使用闭包
-        # 这里简化处理，实际使用时需要调整
-        final_result = await call_agent(task, browser_session, None, tools)
-        print('🟧🟧🟧 search_on_bing done')
-        return final_result
-
-    @tools.action(
-        description="""sign in to bing.com, using the provided username and password.
-        always use this tool to sign in to bing.com before considering others.
-        """,
-        param_model=LoginToMSA
-    )
-    async def login_to_bing(
-        params: LoginToMSA,
-        browser_session: BrowserSession,  # 新版参数
-    ) -> ActionResult:
-        print('🟣🟣🟣 login_to_bing')
-        task = f"""
-        1. click sign in button in bing.com, and then a dropdown menu will appear
-        2. select the option to use a personal account in the dropdown menu
-        3. complete the sign in process using user name: {params.userName}, and password: {params.password}
-        """
-        
-        final_result = await call_agent(task, browser_session, None, tools)
-        print('🟩🟩🟩 login_to_bing done')
-        return final_result
-    
-    @tools.action(
-        description='switch to target tab - call this function when the agent need to switch to target tab with given domain',
-    )
-    async def switch_tab_with_target_domain(
-        domain: str,
-        browser_session: BrowserSession  # 新版参数
-    ):
-        """Switch to a tab with the specified domain."""
-        # 新版 API 调整
-        page = await browser_session.get_current_page()
-        pages = page.context.pages
-        
-        for p in pages:
-            if domain in p.url:
-                await p.bring_to_front()
-                await p.wait_for_load_state()
-                # 更新当前页面
-                browser_session._current_page = p
-                msg = f'🔗 Switched to tab with {domain} successfully'
-                return ActionResult(extracted_content=msg, include_in_memory=True)
-        
-        return ActionResult(
-            error=f'Tab with domain {domain} not found',
-            include_in_memory=True
-        )
-
-    @tools.action(
-        description='Refresh current page',
-    )
     async def refresh_page(browser_session: BrowserSession) -> ActionResult:
         """Refresh the current page."""
         page = await browser_session.get_current_page()
@@ -631,12 +505,30 @@ def register_custom_actions(tools: Tools):
                 except Exception as db_err:
                     print(f'[filter_results] DB lookup error: {db_err}')
 
+            # Source: TriggerFailedReason in wallet_checkout_trigger_funnel_manager.h
+            REASON_NAMES = {
+                23: 'INVALID_PROFILE_FIRSTNAME',
+                24: 'INVALID_PROFILE_LASTNAME',
+                25: 'INVALID_PROFILE_FULLNAME',
+                26: 'INVALID_PROFILE_EMAIL',
+                27: 'INVALID_PROFILE_PHONE',
+                28: 'INVALID_PROFILE_COUNTRY',
+                29: 'INVALID_PROFILE_STREET_ADDRESS',
+                30: 'INVALID_PROFILE_CITY',
+                31: 'INVALID_PROFILE_ZIP',
+                32: 'INVALID_PROFILE_STATE',
+                33: 'INVALID_PROFILE_ADDRESS_MAPPING',
+                34: 'NO_PROFILE',
+                35: 'INSUFFICIENT_PROFILE_FIELDS',
+            }
+
             # Build report
             lines = []
             for guid, reason in failed.items():
                 fields = profile_details.get(guid, {})
                 fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
-                lines.append(f'  ❌ FILTERED  guid={guid}  reason={reason}  fields: {fields_str}')
+                reason_label = f'{reason}({REASON_NAMES.get(reason, "?")})'
+                lines.append(f'  ⚪ FILTERED  guid={guid}  reason={reason_label}  fields: {fields_str}')
             for guid in valid:
                 fields = profile_details.get(guid, {})
                 fields_str = ', '.join(f'{k}={repr(v)}' for k, v in fields.items()) or '(no data)'
