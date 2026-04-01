@@ -63,6 +63,83 @@ pre-checkout 阶段（登录、管理购物车、导航至 checkout）在不同�
 - **Phase 1**：LLM 每次全新执行 `pre_checkout_task`，到达 checkout 页面后结束，不录制
 - **Phase 2**：在同一浏览器 session 上，对 checkout 交互走 replay / explore，只录制这部分
 
+### 三级降级策略（Tiered Degradation）
+
+对于支持全程 replay 的电商类 site，引入三级执行策略，在速度与稳定性之间自动权衡：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Tier 1：全程 Replay（双 Profile，零 LLM）               │
+│  - 耗时：~5-10s                                          │
+│  - LLM 调用：0                                           │
+│  - 条件：双 Profile 已就绪，replay.json 存在              │
+└────────────────────┬────────────────────────────────────┘
+                     │ 连续 K 次在前 M 步失败
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tier 2：两阶段 Replay（Phase 1 LLM + Phase 2 Replay）   │
+│  - 耗时：~120s（Phase 1 LLM ~100s + Phase 2 replay ~25s）│
+│  - LLM 调用：Phase 1 full run                            │
+│  - 条件：Tier 1 频繁失败（checkout 起始状态不稳定）        │
+└────────────────────┬────────────────────────────────────┘
+                     │ Phase 2 replay 也频繁失败
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tier 3：两阶段 Explore（Phase 1 + Phase 2 LLM）          │
+│  - 耗时：~200s（两次 LLM 全量探索）                       │
+│  - LLM 调用：Phase 1 + Phase 2 explore                   │
+│  - 条件：replay.json 失效（站点大改版）                    │
+│  - 触发精炼：explore 完成后自动 refine → 更新 replay.json │
+└─────────────────────────────────────────────────────────┘
+```
+
+**降级触发条件（防止噪音触发）**
+
+- Tier 1 → Tier 2：全程 replay 在前 M 步（M ≤ 3）连续失败 K 次（K = 3）
+  - 前 M 步失败通常意味着 checkout 起始状态不稳定（Profile 未就绪或 cart 变动）
+  - 中后段失败属于站点更新，不触发降级，直接走 heal 逻辑
+- Tier 2 → Tier 3：Phase 2 replay 连续失败 K 次，且 heal 也无法修复
+  - heal 失败说明 replay.json 结构性失效，需要重新 explore
+
+**自动恢复（Auto-Recovery）**
+
+- Tier 2 连续成功 N 次（N = 5）→ 尝试升回 Tier 1（重建双 Profile）
+- Tier 3 完成 explore + refine 后 → 自动升回 Tier 2，下次从 Tier 2 开始
+
+**实现路径**
+
+- 失败计数器持久化到 `{name}.tier_state.json`（记录当前 tier、连续失败数、连续成功数）
+- `ReplayManager.run()` 根据 tier_state 决定执行路径
+- Tier 1 需要双 Profile 支持（见下方"双 Profile + 精准清 Cookie"章节）
+
+---
+
+### 潜在优化：双 Profile + 精准清 Cookie → 全程 replay
+
+对于电商类 site（Nike 等），若能保证 checkout 起始状态稳定，Phase 1 可以省掉，整个流程全程 replay：
+
+**方案**：
+- **Profile A（已登录）**：保留登录 session + 购物车状态，只清 autofill 相关 cookie，不动 cart/session
+- **Profile B（未登录）**：guest checkout 场景独立 profile
+
+这样每次测试直接从 checkout 页面开始 replay，无需 LLM 跑 pre-checkout，速度更快、更稳定。
+
+**inline_sites 适合性分析（基于 wallet-checkout-global-config-stable.json）**：
+
+| 类别 | Site | 结论 |
+|------|------|------|
+| 电商（稳定） | nike.com、target.com、kohls.com、homedepot.com、lowes.com、wayfair.com、jcpenney.com、fanatics.com、bathandbodyworks.com、etsy.com、staples.com、mcafee.com、bedbathandbeyond.com | ✅ 适合全程 replay |
+| 需验证 | amazon.com/co.uk、shop.app、checkout.stripe.com、paypal.com、dominos/papajohns/pizzahut、ebay | ⚠️ 需实测 |
+| 航班/酒店 | expedia.com、delta.com、britishairways.com、ryanair.com、hilton.com、marriott.com、ihg.com、hotels.com、secure.booking.com | ❌ 不适合，保留 Phase 1 LLM |
+| 特殊 | securecheckout.cdc.nicusa.com、facebook.com | ❌ 测试账号难维护 / 场景不固定 |
+
+适合全程 replay 约占 inline_sites 的 36%。
+
+**局限性**：
+- **航班/酒店类**：价格、座位、库存实时变，即使 session 稳定，replay 在业务层面失效。这类场景 pre-checkout 必须每次 LLM 重新探索，只有 autofill 本身那几步（form 出现到 autofill 完成）适合 replay
+- **动态 token**：CSRF token、一次性 checkout token 每次页面加载重新生成，这类步骤无法 replay
+- **依赖 cart 内容的 DOM**：部分站点根据商品类型展开不同字段，stable_hash 会随商品变化漂移
+
 ---
 
 ## Phase 1：全自动精炼 + 断点续跑（已实现 ✅）
@@ -144,7 +221,21 @@ LLM heal agent 接管时看到的是失败那一刻的真实页面状态。
 所有回放参数集中在 `config.py`：
 - `RERUN_MAX_RETRIES = 2`
 - `RERUN_DELAY_BETWEEN_ACTIONS = 1.0`（每步固定等待）
-- `RERUN_MAX_STEP_INTERVAL = 3.0`（压缩 LLM 探索时的 saved interval，默认上限 45s）
+- `RERUN_MAX_STEP_INTERVAL = 2.0`（压缩 LLM 探索时的 saved interval，避免 replay 时等太久）
+
+**rerun() 失败判断逻辑**
+
+优先检查 `rerun_history()` 返回的实际执行结果（`list[ActionResult]`）：
+- 有 `error` 的 result → 尝试从错误消息解析 `Step N failed` → 映射到 history index → 触发 heal
+- 无 error 但 AI summary 报失败 → 从末尾触发 heal
+- 全部成功 → 回放通过
+
+注意：`replay.history[i].result` 是 explore 阶段录制的原始结果，不反映本次 rerun 实际执行情况，不能用于判断失败。
+
+**heal 后合并去重**
+
+heal 产生的 tail 与 head 拼接时，自动检测 head 末尾和 tail 开头的 action type 是否重复
+（例如 `logmonitor_init` 在两段都出现），重复则删除 tail[0]。
 
 ---
 
