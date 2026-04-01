@@ -161,6 +161,7 @@ CANDIDATES for deletion:
 - Repeated open/close of the same dropdown
 - Dead-end exploration steps (navigated away and came back)
 - Observation-only steps (screenshot/extract with no side effects)
+- Steps that pursue a sub-goal that was already satisfied earlier in the history (the agent completed the same objective twice) — keep the first successful path, delete the redundant second attempt
 
 OUTPUT FORMAT — raw JSON only, nothing else:
 {"can_delete": [2, 5, 7], "reasons": {"2": "reason", "5": "reason", "7": "reason"}}

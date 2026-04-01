@@ -6,12 +6,12 @@ Email Helper - 通过 Outlook 桌面版 COM/MAPI 读取邮件
 
 前提：机器上已安装 Outlook 经典版，且 happyautoec@outlook.com 已登录。
 
-鲁棒性设计：
-- 用 EntryID 作为基准而非时间戳：调用前先记录当前最新邮件的 EntryID，
-  之后只看比这个 ID 更新的邮件，完全不依赖时钟同步。
+设计：
+- 两阶段 API：get_baseline_entry_id() + get_verification_code()
+  在触发登录前调用 get_baseline_entry_id() 记录当前收件箱最新邮件的 EntryID，
+  之后只看比这个 ID 更新的邮件，与时钟完全无关。
+  如果未传入 baseline，则回退到最近 2 分钟的时间窗口。
 - COM 调用放线程池：不阻塞 asyncio event loop。
-- 两阶段 API：mark_baseline() + get_verification_code()，
-  由 register_custom_actions.py 暴露为两个 action。
 """
 
 import asyncio
@@ -111,17 +111,24 @@ def _get_outlook_inbox():
 
 def get_baseline_entry_id() -> Optional[str]:
     """
-    Return the EntryID of the most recent message in the inbox right now.
-    Call this BEFORE triggering the login flow.
-    Returns None if inbox is empty.
+    Record the current newest email's EntryID in the inbox.
+    Call this BEFORE triggering any login flow that sends a verification email.
+    Pass the returned value to get_verification_code() so only emails that
+    arrive after this point are considered.
+    Returns None if the inbox is empty (get_verification_code will fall back
+    to a 2-minute recency window).
     """
-    inbox = _get_outlook_inbox()
-    messages = inbox.Items
-    messages.Sort("[ReceivedTime]", True)
-    msg = messages.GetFirst()
-    if msg is None:
+    try:
+        inbox = _get_outlook_inbox()
+        messages = inbox.Items
+        messages.Sort("[ReceivedTime]", True)  # newest first
+        msg = messages.GetFirst()
+        if msg is None:
+            return None
+        return str(msg.EntryID)
+    except Exception as e:
+        print(f"[EmailHelper] get_baseline_entry_id failed: {e}")
         return None
-    return str(msg.EntryID)
 
 
 def get_verification_code(
@@ -150,7 +157,7 @@ def get_verification_code(
     start_time = time.time()
     print(
         f"[EmailHelper] Polling for code "
-        f"(baseline={'set' if baseline_entry_id else 'unset'}, "
+        f"(baseline={'set' if baseline_entry_id else 'unset, using 2-min window'}, "
         f"timeout={timeout_seconds}s)..."
     )
 
@@ -189,15 +196,13 @@ def _check_inbox_once(
     inbox,
     sender_filter: str,
     subject_filter: str,
-    baseline_entry_id: Optional[str],
+    baseline_entry_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Single pass over inbox messages newer than baseline_entry_id."""
+    """Single pass over inbox messages newer than baseline_entry_id (or last 2 min if None)."""
     messages = inbox.Items
     messages.Sort("[ReceivedTime]", True)  # newest first
 
-    # We only want messages that arrived AFTER get_baseline_entry_id() was called.
-    # Strategy: iterate newest-first; stop as soon as we hit the baseline message.
-    # If baseline is None, fall back to a 2-minute recency window.
+    # Fallback cutoff when no baseline is provided
     fallback_cutoff_dt: Optional[datetime] = None
     if baseline_entry_id is None:
         fallback_cutoff_dt = datetime.fromtimestamp(time.time() - 120.0, tz=timezone.utc)
@@ -211,7 +216,7 @@ def _check_inbox_once(
         try:
             entry_id = str(msg.EntryID)
 
-            # Stop when we reach the baseline message (or older)
+            # Stop when we reach the baseline message (inclusive — it's a pre-existing email)
             if baseline_entry_id and entry_id == baseline_entry_id:
                 break
 
@@ -379,11 +384,8 @@ def _extract_verification_code(text: str) -> Optional[str]:
 
 if __name__ == "__main__":
     print("Testing Outlook COM connection...")
-    print("Step 1: recording baseline EntryID...")
-    baseline = get_baseline_entry_id()
-    print(f"  baseline EntryID: {baseline[:32] if baseline else 'None'}...")
-    print("Step 2: polling for Nike verification code (last 2 min fallback)...")
-    code = get_verification_code(baseline_entry_id=None, timeout_seconds=10, poll_interval_seconds=2)
+    print("Polling verification code (last 2 min)...")
+    code = get_verification_code(timeout_seconds=10, poll_interval_seconds=2)
     if code:
         print(f"Found code: {code}")
     else:

@@ -1,89 +1,22 @@
 {
-    "domain": "Nike Checkout",
-    "shared_steps": {
-        "sign_out": {
-            "step_name": "Sign out of Nike account",
-            "step_description": "Call clear_site_data with domain='nike.com' to clear all Nike cookies and storage. Then navigate to https://www.nike.com and verify the page shows an unauthenticated state (no account greeting).",
-            "expected_result": "Nike session should be cleared. Page should show 'Join Us / Sign In' or similar unauthenticated state with no account greeting."
-        },
-        "sign_in": {
-            "step_name": "Sign in to Nike account",
-            "step_description": "Sign in to Nike using email 'happyautoec@outlook.com' and password 'Happy@1234'. IMPORTANT: call email_mark_baseline BEFORE submitting the email, so that get_email_verification_code can later retrieve only freshly-arrived codes. If Nike asks for an email verification code instead of a password, call get_email_verification_code (sender_filter='nike', timeout_seconds=60) to retrieve it. Goal: reach an authenticated state where the account is recognized.",
-            "expected_result": "User should be successfully signed in to Nike. Page should show account icon or greeting indicating authenticated state."
-        },
-        "handle_cart": {
-            "step_name": "Navigate to cart page and handle cart items",
-            "step_description": "Go to the Nike cart (https://www.nike.com/cart). Remove any unavailable items (sold out, out of stock, etc.). If the cart ends up empty, add any one available product. Goal: cart has at least one valid item ready for checkout.",
-            "expected_result": "Cart has at least one valid item ready for checkout."
-        },
-        "navigate_to_checkout": {
-            "step_name": "Navigate to checkout page",
-            "step_description": "Proceed from the cart to checkout. Goal: reach the Nike checkout page (https://www.nike.com/checkout) with cart items loaded.",
-            "expected_result": "Checkout page loaded with cart items."
-        },
-        "init_log_monitor": {
-            "step_name": "Initialize log file monitor",
-            "step_description": "Call logmonitor_init to start monitoring Edge logs for autofill status. Skip if already initialized.",
-            "expected_result": "Log monitor initialized successfully."
-        },
-        "trigger_autofill_popup": {
-            "step_name": "Trigger autofill popup",
-            "step_description": "Goal: get the email or firstName input field focused so Edge's autofill popup appears. Do whatever it takes on the current checkout page to reach these inputs — the page may require clicking Edit or similar buttons first to expose input fields. Once the field is focused: use cdp_click to click it ONCE, wait 2 seconds, then call uia_wait_for_popup (timeout: 5 seconds). If popup not detected, retry once with os_click on the same field, wait 2 seconds, then uia_wait_for_popup (timeout: 5 seconds).",
-            "expected_result": "The selected field should be cleared and focused. Edge's Express Checkout autofill popup should appear and be detected by UIA (popup visible, regardless of option count)."
-        },
-        "uia_click_autofill": {
-            "step_name": "Click autofill button via UIA",
-            "step_description": "Use uia_select_autofill action to click the first autofill option in the detected popup. This should trigger the autofill process to fill all form fields.",
-            "expected_result": "UIA should successfully click the autofill button, and form fields (email, firstName, lastName, address, etc.) should be automatically filled"
-        },
-        "wait_autofill_log": {
-            "step_name": "Wait for autofill completion via log monitor",
-            "step_description": "Call logmonitor_wait_for_state with expected_state='AutofillSucceeded' and timeout=30 to confirm autofill completed.",
-            "expected_result": "State 'AutofillSucceeded' detected in Edge log."
-        },
-        "verify_profile_filtered": {
-            "step_name": "Verify invalid profiles are filtered",
-            "step_description": "Call logmonitor_get_filter_results. Check that all invalid profiles are FILTERED with a non-zero failed_reason, and at least one profile is VALID.",
-            "expected_result": "All invalid profiles FILTERED with non-zero failed_reason. At least 1 profile VALID."
-        }
-    },
+    "domain": "https://www.nike.com",
+    "site_guidance": [
+        "Before evaluating cart state, wait 3 seconds for the page to finish loading.",
+        "Before checkout: ensure the cart has exactly one valid item — remove unavailable items (sold out/out of stock) or extra items; if empty, add any available product.",
+        "Before triggering autofill: Nike may show a saved address list. To get the email or firstName input focused, prefer editing an existing address (click Edit) rather than adding a new one."
+    ],
     "test_cases": [
         {
-            "test_case_name": "Nike_autofill_Guest",
-            "test_case_description": "Navigate to Nike checkout page as guest, trigger autofill popup, and click autofill button. Preconditions: Edge browser has at least one saved address",
-            "steps": [
-                { "ref": "sign_out" },
-                { "ref": "handle_cart" },
-                { "ref": "navigate_to_checkout" },
-                { "ref": "init_log_monitor" },
-                { "ref": "trigger_autofill_popup" },
-                { "ref": "uia_click_autofill" },
-                { "ref": "wait_autofill_log" }
-            ],
-            "replay_steps": [],
-            "enable_features": "--enable-features=msEdgeSettingsWalletWebui2",
-            "disable_features": null,
-            "prerun_calls": null,
-            "postrun_calls": null
+            "name": "Nike_autofill_Guest",
+            "instructions": ["You must be signed out — do not sign in at any point during this test."]
         },
         {
-            "test_case_name": "Nike_autofill_Signed_In",
-            "test_case_description": "Sign in to Nike with a registered account, navigate to checkout, trigger autofill popup, verify invalid profiles are filtered, then complete autofill. Account: happyautoec@outlook.com / Happy@1234. Preconditions: (1) Edge has at least one fully valid saved address. (2) Edge also has 5 additional saved address profiles each with exactly one invalid field and all other fields valid: name='1', zip='1', phone='1', invalid email format (e.g. 'e650628.g. 1'), city='1'.",
-            "steps": [
-                { "ref": "sign_in" },
-                { "ref": "handle_cart" },
-                { "ref": "navigate_to_checkout" },
-                { "ref": "init_log_monitor" },
-                { "ref": "trigger_autofill_popup" },
-                { "ref": "verify_profile_filtered" },
-                { "ref": "uia_click_autofill" },
-                { "ref": "wait_autofill_log" }
-            ],
-            "replay_steps": [],
-            "enable_features": "--enable-features=msEdgeSettingsWalletWebui2",
-            "disable_features": null,
-            "prerun_calls": null,
-            "postrun_calls": null
+            "name": "Nike_autofill_Signed_In",
+            "preconditions": "Edge must have exactly one fully valid saved address, plus 5 profiles each with one invalid field (name='1', zip='1', phone='1', invalid email format, city='1').",
+            "instructions": [
+                "You must be logged in before reaching checkout.",
+                "Verify that the autofill popup shows only the one valid profile and invalid profiles are filtered out."
+            ]
         }
     ]
 }

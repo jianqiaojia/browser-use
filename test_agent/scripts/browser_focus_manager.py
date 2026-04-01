@@ -186,11 +186,6 @@ class BrowserFocusManager:
 				self._thread.join(timeout=3)
 			print(f"[FocusManager] Focus keeper stopped")
 
-		# 取消 TOPMOST
-		if self.keep_topmost and self._browser_hwnd:
-			self._set_topmost(False)
-			print(f"[FocusManager] ✅ TOPMOST removed")
-
 		self._browser_hwnd = None
 		print(f"[FocusManager] Stopped")
 

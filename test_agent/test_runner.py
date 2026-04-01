@@ -1,5 +1,5 @@
 """
-Test runner using Claude Opus via MicrosoftAI LLM Proxy
+Test runner using Claude via MicrosoftAI LLM Proxy
 
 Auto-discovers and runs all *.test.json files in test_case/ directory.
 """
@@ -23,59 +23,111 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import test_agent.llm.strip_patch  # noqa: F401
 import test_agent.llm.litellm_patch  # noqa: F401
 
-from browser_use import Agent, BrowserProfile
-from browser_use.agent.views import MessageCompactionSettings
+from browser_use import BrowserProfile
 from test_agent.llm.llm_config import get_claude_sonnet as get_claude
 from test_agent.config import config
-from test_agent.models import TestCase, ECTest, TestStep
+from test_agent.models import TestCase, SiteTest
 from test_agent.register_custom_actions import register_custom_actions
 from test_agent.scripts.browser_focus_manager import BrowserFocusManager
 from test_agent.scripts.windows_helper import kill_edge_processes
+from test_agent.replay.replay_manager import ReplayManager
 
 
-def build_task_from_steps(steps: list[TestStep]) -> str:
-	"""Build task description from test steps.
+def _load_preamble() -> str | None:
+	"""Load the global task preamble from task_preamble.txt."""
+	path = Path(__file__).parent / "test_case" / "task_preamble.txt"
+	return path.read_text(encoding="utf-8").strip() if path.exists() else None
 
-	Args:
-		steps: List of test steps
 
-	Returns:
-		Task description string
+def build_task(
+	test: TestCase,
+	preamble: str | None,
+	site_guidance: str | None,
+	domain: str | None = None,
+) -> str:
 	"""
-	task_parts = []
-	for step in steps:
-		task_parts.append(f"{step.step_name}: {step.step_description}")
-	return "\n".join(task_parts)
+	Build the task string passed to the LLM agent.
+
+	preamble is a markdown template with placeholders:
+	  {--Domain--}       — replaced with domain URL
+	  {--Instructions--} — replaced with test.instructions
+	  {--Guidance--}     — replaced with site_guidance + test.guidance as bullet list
+	"""
+	if not preamble:
+		return ""
+
+	text = preamble
+
+	# Replace {--Domain--}
+	text = text.replace("{--Domain--}", domain or "")
+
+	# Replace {--Instructions--}
+	if test.instructions:
+		if isinstance(test.instructions, list):
+			inst_items = "\n".join(f"- {l}" for l in test.instructions)
+		else:
+			inst_items = f"- {test.instructions}"
+		text = text.replace("{--Instructions--}", inst_items)
+	else:
+		text = text.replace("{--Instructions--}", "")
+
+	# Replace {--Guidance--} with bullet list
+	if site_guidance or test.guidance:
+		if isinstance(site_guidance, list):
+			sg_lines: list[str] = site_guidance
+		elif site_guidance:
+			sg_lines = [site_guidance]
+		else:
+			sg_lines = []
+		if isinstance(test.guidance, list):
+			tg_lines: list[str] = test.guidance
+		elif test.guidance:
+			tg_lines = [test.guidance]
+		else:
+			tg_lines = []
+		all_lines = sg_lines + tg_lines
+		guidance_items = "\n".join(f"- {l}" for l in all_lines)
+	else:
+		guidance_items = ""
+	text = text.replace("{--Guidance--}", guidance_items)
+
+	return text
+
+
+def load_test_file(test_file: str) -> SiteTest:
+	"""Load a *.test.json file into a SiteTest object."""
+	test_path = Path(test_file)
+	if not test_path.exists():
+		raise FileNotFoundError(f"Test file not found: {test_file}")
+	data = json.loads(test_path.read_text(encoding="utf-8"))
+	return SiteTest(**data)
 
 
 async def run_test_case(
 	llm: Any,
 	test: TestCase,
+	site_guidance: str | None,
+	preamble: str | None,
 	trigger_id: str,
 	run_id: int,
+	replay_dir: Path,
 	focus_manager: Optional[BrowserFocusManager] = None,
+	explore: bool = False,
+	explore_and_refine: bool = False,
+	domain: str | None = None,
 ) -> bool:
-	"""Execute a test case using Claude.
-
-	Args:
-		llm: Language model to use for the agent
-		test: Test case to execute
-		trigger_id: Identifier for the test trigger
-		run_id: Run identifier
-		focus_manager: Optional browser focus manager instance
-
-	Returns:
-		True if test passed, False otherwise
-	"""
+	"""Execute a single test case."""
 	print(f"\n{'='*60}")
-	print(f"Test Case: {test.test_case_name}")
-	print(f"Description: {test.test_case_description}")
+	print(f"Test Case: {test.name}")
+	if test.instructions:
+		print(f"Instructions: {test.instructions}")
+	if test.guidance:
+		print(f"Guidance: {test.guidance}")
 	print(f"Trigger ID: {trigger_id}, Run ID: {run_id}")
 	print(f"{'='*60}")
 
 	try:
-		# Build task from steps
-		task = build_task_from_steps(test.steps)
+		task = build_task(test, preamble, site_guidance, domain)
 		print(f"\n[Task]\n{task}\n")
 
 		# Get browser config
@@ -98,15 +150,8 @@ async def run_test_case(
 
 		# Create and run Agent with pre-configured tools
 		print("[Agent] Creating agent with Claude Opus...")
-		agent = Agent(
-			task=task,
-			llm=llm,
-			browser_profile=browser_profile,
-			tools=tools,  # Pass tools with custom actions
-			max_actions_per_step=config.max_actions_per_step,
-			use_vision=config.vision_enabled,
-			message_compaction=MessageCompactionSettings(),
-		)
+		safe_name = test.name.replace(" ", "_").replace("-", "_").lower()
+		replay_path = replay_dir / f"{safe_name}.replay.json"
 
 		# Start focus manager if provided (in background thread, non-blocking)
 		if focus_manager:
@@ -114,72 +159,41 @@ async def run_test_case(
 			# 在后台线程启动，不阻塞主流程
 			import concurrent.futures
 			loop = asyncio.get_event_loop()
-			focus_task = loop.run_in_executor(
-				None,  # 使用默认 ThreadPoolExecutor
-				focus_manager.start_sync  # 同步版本的 start
-			)
-			# 不等待完成，让它在后台运行
+			loop.run_in_executor(None, focus_manager.start_sync)
 			print("[FocusManager] Focus manager starting in background (non-blocking)...")
 
 		# Run test
-		print("[Run] Executing test...")
-		history = await agent.run(max_steps=config.max_steps)
+		manager = ReplayManager(
+			replay_path=replay_path,
+			task=task,
+			llm=llm,
+			browser_profile=browser_profile,
+			tools=tools,
+		)
 
-		# Stop focus manager after test completes
+		import time
+		t0 = time.perf_counter()
+		if explore or explore_and_refine:
+			mode = "explore" if explore else "explore-and-refine"
+			dry_run = explore
+			print(f"[ReplayManager] replay path: {replay_path} (mode={mode})")
+			success = await manager.explore(dry_run=dry_run)
+		else:
+			mode = "replay" if replay_path.exists() else "explore"
+			print(f"[ReplayManager] replay path: {replay_path} (mode={mode})")
+			success = await manager.run()
+		elapsed = time.perf_counter() - t0
+		print(f"\n⏱️  [{mode}] {elapsed:.1f}s — {'✅ PASS' if success else '❌ FAIL'}")
+
 		if focus_manager:
 			focus_manager.stop()
 			print("[FocusManager] Focus manager stopped")
 
-		# Save history IMMEDIATELY after test completes, before any other operations
-		safe_name = test.test_case_name.replace(" ", "_").replace("-", "_").lower()
-		history_file = f"logs/{safe_name}.history.json"
-
-		print(f"\n[Save] Saving history to {history_file}")
-		try:
-			agent.save_history(history_file)
-			print(f"[Save] ✅ History saved successfully")
-		except Exception as save_error:
-			print(f"[Save] ⚠️ Error saving history: {save_error}")
-			# Try to save with error information
-			try:
-				import json
-				from pathlib import Path
-				Path(history_file).parent.mkdir(parents=True, exist_ok=True)
-				with open(history_file, 'w', encoding='utf-8') as f:
-					json.dump({
-						"error": f"Failed to save full history: {save_error}",
-						"partial_history": str(history)[:10000]  # Save first 10k chars as fallback
-					}, f, indent=2)
-				print(f"[Save] ⚠️ Saved partial history as fallback")
-			except Exception as fallback_error:
-				print(f"[Save] ❌ Could not save even partial history: {fallback_error}")
-
-		# Check results
-		success = history.is_successful()
-
 		# Mark proxy result if used
 		if config.use_proxy and config._current_proxy:
-			# Simple success/failure based on test result
 			await config.mark_proxy_result(success=bool(success), response_time=0.0)
-			print(f"[Proxy] Marked result: {'success' if success else 'failure'}")
 
-		# Print statistics
-		print(f"\n[Stats] Test Statistics:")
-		print(f"  Total steps: {len(history.history)}")
-		print(f"  Total actions: {len(history.action_names())}")
-		print(f"  Action types: {set(history.action_names())}")
-
-		if success:
-			print("\n[OK] Test PASSED")
-		else:
-			print("\n[WARN] Test completed with warnings")
-			if history.errors():
-				print("  Errors:")
-				for error in history.errors():
-					if error:
-						print(f"    - {error}")
-
-		return success if success is not None else False
+		return success
 
 	except Exception as e:
 		print(f"\n[FAIL] Error running test: {str(e)}")
@@ -191,51 +205,6 @@ async def run_test_case(
 		return False
 
 
-def load_test_file(test_file: str) -> ECTest:
-	"""Load test case from JSON file, resolving any shared_steps refs inline.
-
-	Args:
-		test_file: Path to test JSON file
-
-	Returns:
-		ECTest object with all steps fully resolved (no refs remain)
-
-	Raises:
-		FileNotFoundError: If test file not found
-	"""
-	print(f"\n{'='*60}")
-	print(f"Loading test file: {test_file}")
-	print(f"{'='*60}")
-
-	test_path = Path(test_file)
-	if not test_path.exists():
-		raise FileNotFoundError(f"Test file not found: {test_file}")
-
-	with open(test_path, 'r', encoding='utf-8') as f:
-		test_data = json.load(f)
-
-	ec_test = ECTest(**test_data)
-
-	# Resolve shared_steps refs: replace each ref-step with the actual shared step inline
-	if ec_test.shared_steps:
-		for test_case in ec_test.test_cases:
-			resolved = []
-			for step in test_case.steps:
-				if step.ref is not None:
-					assert step.ref in ec_test.shared_steps, (
-						f"[{test_case.test_case_name}] Step ref '{step.ref}' not found in shared_steps. "
-						f"Available: {list(ec_test.shared_steps.keys())}"
-					)
-					resolved.append(ec_test.shared_steps[step.ref])
-				else:
-					resolved.append(step)
-			test_case.steps = resolved
-		# Clear shared_steps so callers never see unresolved refs
-		ec_test.shared_steps = None
-
-	return ec_test
-
-
 async def run_test_file(
 	test_file: str,
 	llm: Any,
@@ -243,55 +212,52 @@ async def run_test_file(
 	run_id: int = 1,
 	enable_focus_manager: bool = False,
 	test_case_filter: Optional[str] = None,
+	explore: bool = False,
+	explore_and_refine: bool = False,
 ) -> bool:
-	"""Run tests from a test file.
+	"""Run all test cases from a *.test.json file."""
+	print(f"\n{'='*60}")
+	print(f"Loading test file: {test_file}")
+	print(f"{'='*60}")
 
-	Args:
-		test_file: Path to test JSON file
-		llm: Language model to use
-		trigger_id: Identifier for the test trigger
-		run_id: Run identifier
-		enable_focus_manager: Enable browser focus manager (TOPMOST + auto restore)
+	site_test = load_test_file(test_file)
+	preamble = _load_preamble()
 
-	Returns:
-		True if all tests passed, False otherwise
-	"""
-	ec_test = load_test_file(test_file)
+	# replay files live next to the test file
+	replay_dir = Path(test_file).parent
 
-	# Create focus manager if enabled
 	focus_manager = None
 	if enable_focus_manager:
 		print("\n[FocusManager] Initializing browser focus manager...")
 		focus_manager = BrowserFocusManager(
-			browser_process_name='msedge.exe',  # TODO: make configurable
-			keep_topmost=True,                  # Always on top
-			auto_restore_focus=False,           # Only set once, don't continuously restore
-			check_interval=2.0                  # Not used when auto_restore_focus=False
+			browser_process_name='msedge.exe',
+			keep_topmost=True,
+			auto_restore_focus=False,
+			check_interval=2.0,
 		)
 		print("[FocusManager] Focus manager created (will start after browser launch)")
 
-	# Run tests
 	results = []
-	for test_case in ec_test.test_cases:
-		# Apply test case name filter if specified
-		if test_case_filter and test_case_filter.lower() not in test_case.test_case_name.lower():
-			print(f"\n[Filter] Skipping: {test_case.test_case_name}")
+	for test_case in site_test.test_cases:
+		if test_case_filter and test_case_filter.lower() not in test_case.name.lower():
+			print(f"\n[Filter] Skipping: {test_case.name}")
 			continue
 
 		success = await run_test_case(
-			llm,
-			test_case,
-			trigger_id,
-			run_id,
-			focus_manager,
+			llm=llm,
+			test=test_case,
+			site_guidance=site_test.site_guidance,
+			preamble=preamble,
+			trigger_id=trigger_id,
+			run_id=run_id,
+			replay_dir=replay_dir,
+			focus_manager=focus_manager,
+			explore=explore,
+			explore_and_refine=explore_and_refine,
+			domain=site_test.domain,
 		)
+		results.append({"test_case": test_case.name, "success": success})
 
-		results.append({
-			"test_case": test_case.test_case_name,
-			"success": success
-		})
-
-	# Print summary for this file
 	print(f"\n{'='*60}")
 	print(f"Test Summary for {Path(test_file).name}")
 	print(f"{'='*60}")
@@ -301,15 +267,11 @@ async def run_test_file(
 
 	total = len(results)
 	passed = sum(1 for r in results if r["success"])
-	failed = total - passed
+	print(f"\n[Stats] Total: {total}  Passed: {passed}  Failed: {total - passed}")
+	if total:
+		print(f"  Success Rate: {passed/total*100:.1f}%")
 
-	print(f"\n[Stats] File Results:")
-	print(f"  Total: {total}")
-	print(f"  Passed: {passed}")
-	print(f"  Failed: {failed}")
-	print(f"  Success Rate: {passed/total*100:.1f}%")
-
-	return failed == 0
+	return total > 0 and (total - passed) == 0
 
 
 async def main():
@@ -319,48 +281,19 @@ async def main():
 	parser = argparse.ArgumentParser(
 		description="Run browser automation tests with Claude (auto-discovers *.test.json)"
 	)
-	parser.add_argument(
-		"--trigger-id",
-		default="manual",
-		help="Test trigger identifier (default: manual)"
-	)
-	parser.add_argument(
-		"--run-id",
-		type=int,
-		default=1,
-		help="Test run identifier (default: 1)"
-	)
-	parser.add_argument(
-		"--model",
-		default="claude-opus-4-5",
-		help="Claude model name (default: claude-sonnet-4-5)"
-	)
-	parser.add_argument(
-		"--proxy",
-		default="http://localhost:5000",
-		help="Proxy endpoint (default: http://localhost:5000)"
-	)
-	parser.add_argument(
-		"--use-proxy-pool",
-		action="store_true",
-		help="Enable free proxy pool for anti-bot (rotates IPs)"
-	)
-	parser.add_argument(
-		"--max-proxies",
-		type=int,
-		default=30,
-		help="Maximum proxies to scrape (default: 30)"
-	)
-	parser.add_argument(
-		"--disable-browser-focus",
-		action="store_true",
-		help="Disable browser focus management (browser won't stay TOPMOST by default)"
-	)
-	parser.add_argument(
-		"--test-case",
-		default=None,
-		help="Only run test cases whose name contains this substring (case-insensitive)"
-	)
+	parser.add_argument("--trigger-id", default="manual")
+	parser.add_argument("--run-id", type=int, default=1)
+	parser.add_argument("--model", default="claude-opus-4-5")
+	parser.add_argument("--proxy", default="http://localhost:5000")
+	parser.add_argument("--use-proxy-pool", action="store_true")
+	parser.add_argument("--max-proxies", type=int, default=30)
+	parser.add_argument("--disable-browser-focus", action="store_true")
+	parser.add_argument("--test-case", default=None,
+		help="Only run test cases whose name contains this substring (case-insensitive)")
+	parser.add_argument("--explore", action="store_true",
+		help="LLM explore only, save to .draft.json (does not touch replay.json)")
+	parser.add_argument("--explore-and-refine", action="store_true",
+		help="LLM explore + refine, directly overwrite replay.json")
 
 	args = parser.parse_args()
 
@@ -369,55 +302,36 @@ async def main():
 	processes_killed = kill_edge_processes()
 	if processes_killed:
 		import time
-		print("[Init] Waiting 2 seconds for cleanup to complete...")
+		print("[Init] Waiting 2 seconds for cleanup...")
 		time.sleep(2)
 
 	# Initialize proxy pool if requested
 	if args.use_proxy_pool:
-		print(f"\n[Init] Initializing free proxy pool...")
-		print(f"  Target proxies: {args.max_proxies}")
+		print(f"\n[Init] Initializing free proxy pool (target={args.max_proxies})...")
 		await config.init_proxy_pool(max_proxies=args.max_proxies)
 		if config.proxy_pool:
 			stats = config.proxy_pool.get_stats()
-			print(f"  [OK] Proxy pool ready: {stats['available']}/{stats['total']} proxies available")
-		else:
-			print(f"  [WARN] Proxy pool initialization failed, continuing without proxies")
+			print(f"  [OK] {stats['available']}/{stats['total']} proxies available")
 
-	# Initialize Claude LLM
-	print("\n[Init] Initializing Claude Opus via MicrosoftAI LLM Proxy...")
-	print(f"  Model: {args.model}")
-	print(f"  Proxy: {args.proxy}")
-
-	llm = get_claude(
-		model=args.model,
-		base_url=args.proxy,
-	)
+	# Initialize LLM
+	print(f"\n[Init] Model: {args.model}  Proxy: {args.proxy}")
+	llm = get_claude(model=args.model, base_url=args.proxy)
 
 	# Auto-discover test files
-	script_dir = Path(__file__).parent
-	# script_dir is test_agent/, parent is browser-use/
-	repo_root = script_dir.parent  # test_agent/ -> browser-use/
-	test_case_dir = repo_root / 'test_agent' / 'test_case'
-	test_files = list(test_case_dir.glob('**/*.test.json'))
+	test_case_dir = Path(__file__).parent / "test_case"
+	test_files = list(test_case_dir.glob("**/*.test.json"))
 
 	if not test_files:
-		print(f"\n[FAIL] No test files found in {test_case_dir}/")
-		print("  Looking for: **/*.test.json")
+		print(f"\n[FAIL] No *.test.json files found in {test_case_dir}/")
 		sys.exit(1)
 
 	print(f"\n[Discovery] Found {len(test_files)} test file(s):")
 	for tf in test_files:
-		print(f"  - {tf.relative_to(repo_root)}")
+		print(f"  - {tf.relative_to(Path(__file__).parent.parent)}")
 
 	# Show focus manager status
-	enable_focus_manager = not args.disable_browser_focus  # Enabled by default
-	if enable_focus_manager:
-		print(f"\n[FocusManager] Browser focus management: ENABLED (default)")
-		print(f"  - TOPMOST: Browser will be set on top once at startup")
-		print(f"  (use --disable-browser-focus to turn off)")
-	else:
-		print(f"\n[FocusManager] Browser focus management: DISABLED")
-		print(f"  (focus management turned off by --disable-browser-focus flag)")
+	enable_focus_manager = not args.disable_browser_focus
+	print(f"\n[FocusManager] {'ENABLED' if enable_focus_manager else 'DISABLED'}")
 
 	# Run all test files
 	all_success = True
@@ -429,6 +343,8 @@ async def main():
 			args.run_id,
 			enable_focus_manager=enable_focus_manager,
 			test_case_filter=args.test_case,
+			explore=args.explore,
+			explore_and_refine=args.explore_and_refine,
 		)
 		if not success:
 			all_success = False
