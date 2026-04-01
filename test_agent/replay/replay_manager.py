@@ -215,11 +215,42 @@ class ReplayManager:
 			elapsed = time.perf_counter() - t0
 			logger.info(f'[ReplayManager] rerun completed in {elapsed:.1f}s ({len(replay.history)} steps, avg {elapsed/len(replay.history):.1f}s/step)')
 
-			# Even if rerun didn't crash, check that done(success=True) was actually called
+			# results is a flat list of ActionResult from this rerun execution.
+			# The last entry is the AI summary (is_done=True) — strip it before checking errors.
+			action_results = [r for r in results if r and not r.is_done]
+			error_results = [r for r in action_results if r.error]
+
+			if error_results:
+				first_error = error_results[0].error or ''
+				logger.warning(f'[ReplayManager] rerun action result has error: {first_error[:150]}')
+
+				# Try to map the error back to a history step index via "Step N failed" message
+				step_num = _extract_failed_step_index(first_error)
+				if step_num is not None:
+					for i, h in enumerate(replay.history):
+						if h.metadata and h.metadata.step_number == step_num:
+							logger.warning(f'[ReplayManager] mapped to history index {i} → triggering heal')
+							return i
+					fallback = max(0, step_num - 1)
+					logger.warning(f'[ReplayManager] step_num={step_num} not matched, fallback index={fallback} → triggering heal')
+					return fallback
+
+				# Cannot parse step number — heal from the first protected action step
+				from test_agent.replay.history_refiner import _PROTECTED_ACTION_TYPES, _get_action_type
+				for i, history_item in enumerate(replay.history):
+					step_dict = history_item.model_dump()
+					if _get_action_type(step_dict) in _PROTECTED_ACTION_TYPES:
+						logger.warning(f'[ReplayManager] heal from first protected action step {i}')
+						return i
+				return len(replay.history) - 1
+
+			# No action errors — also sanity-check the AI summary
 			done_result = next((r for r in results if r and r.is_done), None)
 			if done_result is None or not done_result.success:
-				logger.warning(f'[ReplayManager] rerun finished but task not marked successful (done={done_result}) → triggering heal')
-				return len(replay.history) - 1  # heal from last step
+				logger.warning(f'[ReplayManager] rerun finished but AI summary reports failure → triggering heal')
+				return len(replay.history) - 1
+
+			logger.info('[ReplayManager] all action results clean, AI summary reports success ✅')
 			return None  # 成功
 		except RuntimeError as e:
 			error_msg = str(e)
@@ -288,7 +319,18 @@ class ReplayManager:
 		head_steps = replay.history[:failed_step_index]
 		if failed_step_index == 0:
 			logger.info('[ReplayManager] first step failed, merged replay is tail-only (full replacement)')
-		merged = AgentHistoryList(history=head_steps + refined_tail.history)
+
+		# 去掉 tail 开头与 head 末尾重复的 action type（例如 LLM heal 时重新执行了 logmonitor_init）
+		from test_agent.replay.history_refiner import _get_action_type
+		tail_steps = list(refined_tail.history)
+		if head_steps and tail_steps:
+			head_last_type = _get_action_type(head_steps[-1].model_dump())
+			tail_first_type = _get_action_type(tail_steps[0].model_dump())
+			if head_last_type and head_last_type == tail_first_type:
+				logger.info(f'[ReplayManager] dedup: removing tail[0] ({tail_first_type}) — duplicates head[-1]')
+				tail_steps = tail_steps[1:]
+
+		merged = AgentHistoryList(history=head_steps + tail_steps)
 
 		logger.info(
 			f'[ReplayManager] merged: head={len(head_steps)} + tail={len(refined_tail.history)} = {len(merged.history)} steps'

@@ -36,8 +36,10 @@ async def execute_uia_wait_for_popup(
 
 	while (time.time() - start_time) < params.timeout:
 		check_count += 1
+		# verbose only on first check — subsequent polls are silent to avoid log spam
+		verbose = check_count == 1
 		try:
-			result = uia_helper.find_autofill_popup()
+			result = uia_helper.find_autofill_popup(verbose=verbose)
 			if result and result.get('success'):
 				elapsed = time.time() - start_time
 				msg = f'✅ Autofill popup detected after {elapsed:.1f}s ({check_count} checks)'

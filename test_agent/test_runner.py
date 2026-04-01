@@ -290,4 +290,12 @@ async def main():
 if __name__ == "__main__":
 	import warnings
 	warnings.filterwarnings("ignore", category=ResourceWarning)
+
+	# On Windows, asyncio ProactorBasePipeTransport objects that weren't explicitly closed
+	# raise "Exception ignored in: __del__" after the event loop shuts down, because their
+	# __repr__ calls fileno() on an already-closed pipe. This fires via sys.unraisablehook
+	# (not the warnings module), so filterwarnings can't catch it. Suppress only those.
+	_orig_unraisablehook = sys.unraisablehook
+	sys.unraisablehook = lambda u: None if u.object is not None and 'PipeTransport' in type(u.object).__name__ else _orig_unraisablehook(u)
+
 	asyncio.run(main())
