@@ -189,8 +189,6 @@ class UIAHelper:
                 class_condition
             )
             
-            vprint(f"Found {windows.Length} Chrome windows, searching for Dialog elements...")
-            
             # 在每个Chrome窗口内搜索Dialog角色的元素
             for i in range(windows.Length):
                 window = windows.GetElement(i)
@@ -213,8 +211,6 @@ class UIAHelper:
                         UIAutomationClient.TreeScope_Descendants,
                         dialog_condition
                     )
-                    
-                    vprint(f"  Found {dialogs.Length} pane elements")
                     
                     # 检查每个Dialog
                     for j in range(dialogs.Length):
@@ -272,8 +268,6 @@ class UIAHelper:
             
             vprint(f"\n{'='*60}")
             vprint("❌ Express Checkout Popup not found")
-            vprint("Make sure the popup is visible on screen")
-            vprint(f"{'='*60}\n")
             return {'success': False, 'error': 'Popup not found in any browser window'}
             
         except Exception as e:

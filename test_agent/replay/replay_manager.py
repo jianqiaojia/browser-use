@@ -205,7 +205,7 @@ class ReplayManager:
 
 		try:
 			t0 = time.perf_counter()
-			await agent.rerun_history(
+			results = await agent.rerun_history(
 				replay,
 				max_retries=self.rerun_max_retries,
 				skip_failures=False,
@@ -214,6 +214,12 @@ class ReplayManager:
 			)
 			elapsed = time.perf_counter() - t0
 			logger.info(f'[ReplayManager] rerun completed in {elapsed:.1f}s ({len(replay.history)} steps, avg {elapsed/len(replay.history):.1f}s/step)')
+
+			# Even if rerun didn't crash, check that done(success=True) was actually called
+			done_result = next((r for r in results if r and r.is_done), None)
+			if done_result is None or not done_result.success:
+				logger.warning(f'[ReplayManager] rerun finished but task not marked successful (done={done_result}) → triggering heal')
+				return len(replay.history) - 1  # heal from last step
 			return None  # 成功
 		except RuntimeError as e:
 			error_msg = str(e)

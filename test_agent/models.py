@@ -29,9 +29,3 @@ class SiteTest(BaseModel):
     site_pre_checkout_guidance: Optional[str | list[str]] = None
     site_checkout_guidance: Optional[str | list[str]] = None
     test_cases: list[TestCase] = []
-
-
-class SetSessionStorageAction(BaseModel):
-    """设置 SessionStorage 的参数模型"""
-    key: str
-    value: str

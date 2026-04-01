@@ -1,11 +1,11 @@
 {
     "domain": "https://www.nike.com",
     "site_pre_checkout_guidance": [
-        "Before evaluating cart state, wait 3 seconds for the page to finish loading.",
-        "Before checkout: ensure the cart has exactly one valid item — remove unavailable items (sold out/out of stock) or extra items; if empty, add any available product."
+        "Before evaluating cart state, wait 3 seconds for the page to finish loading; ensure the cart has exactly one valid item — remove unavailable items (sold out/out of stock) or extra items; if empty, add any available product."
     ],
     "site_checkout_guidance": [
-        "Before triggering autofill: Nike may show a saved address list. To get the email or firstName input focused, prefer editing an existing address (click Edit) rather than adding a new one."
+        "To trigger the autofill popup, focus the email or firstName field (do not use payment/card fields).",
+        "Nike may show a saved address summary with the form collapsed — click Edit on the existing address to expand it, do not add a new one."
     ],
     "test_cases": [
         {
@@ -16,7 +16,10 @@
             "name": "Nike_autofill_Signed_In",
             "preconditions": "Edge must have exactly one fully valid saved address, plus 5 profiles each with one invalid field (name='1', zip='1', phone='1', invalid email format, city='1').",
             "pre_checkout_instructions": [
-                "You must be signed in before reaching checkout. Sign in using email 'happyautoec@outlook.com' and password 'Happy@1234'. If Nike asks for an email verification code, call email_mark_baseline BEFORE submitting the sign-in form, then use get_email_verification_code (sender_filter='nike', timeout_seconds=30) to retrieve it."
+                "You must be signed in before reaching checkout. Sign in using email 'happyautoec@outlook.com' and password 'Happy@1234'. Prefer use verification code sent to email over password entry when possible."
+            ],
+            "pre_checkout_guidance": [
+                "Before clicking Continue on the email entry page, call email_mark_baseline first."
             ],
             "checkout_instructions": [
                 "Verify that the autofill popup shows only the one valid profile and invalid profiles are filtered out."
