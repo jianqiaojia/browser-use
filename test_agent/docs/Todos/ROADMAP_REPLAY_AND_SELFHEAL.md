@@ -258,12 +258,6 @@ test_agent/
 
 ---
 
-## Phase 2：自愈 CI/CD
-
-已拆分为独立文档：[ROADMAP_SELFHEAL_CICD.md](./ROADMAP_SELFHEAL_CICD.md)
-
----
-
 ## 现有工程基础
 
 | 组件 | 文件 | 用途 |
