@@ -6,24 +6,28 @@ from pydantic import BaseModel
 class TestCase(BaseModel):
     """单个测试用例。
 
-    preconditions:  跑测试前需要人工满足的环境条件。仅供参考，不进 task prompt。
-    instructions:   LLM 必须遵守的约束（登录状态、验证目标等）。进入 task prompt。
-    guidance:       UI 操作参考建议，LLM 根据实际情况判断。进入 task prompt。
+    pre_checkout_instructions:  Phase 1 硬性约束（登录状态、cart 准备等）。进入 pre-checkout task prompt。
+    pre_checkout_guidance:      Phase 1 UI 操作参考建议。进入 pre-checkout task prompt。
+    checkout_instructions:      Phase 2 硬性约束（autofill 验证目标等）。进入 checkout task prompt。
+    checkout_guidance:          Phase 2 UI 操作参考建议。进入 checkout task prompt。
     """
     name: str
-    preconditions: Optional[str] = None
-    instructions: Optional[str | list[str]] = None
-    guidance: Optional[str | list[str]] = None
+    pre_checkout_instructions: Optional[str | list[str]] = None
+    pre_checkout_guidance: Optional[str | list[str]] = None
+    checkout_instructions: Optional[str | list[str]] = None
+    checkout_guidance: Optional[str | list[str]] = None
 
 
 class SiteTest(BaseModel):
     """单个 site 的测试集合。
 
-    domain:        测试目标站点的 URL（e.g. https://www.nike.com）。
-    site_guidance: 适用于该 site 所有 test case 的共享 UI 操作参考。
+    domain:                    测试目标站点的 URL（e.g. https://www.nike.com）。
+    site_pre_checkout_guidance: 适用于该 site 所有 test case 的 Phase 1 共享 UI 操作参考。
+    site_checkout_guidance:    适用于该 site 所有 test case 的 Phase 2 共享 UI 操作参考。
     """
     domain: Optional[str] = None
-    site_guidance: Optional[str | list[str]] = None
+    site_pre_checkout_guidance: Optional[str | list[str]] = None
+    site_checkout_guidance: Optional[str | list[str]] = None
     test_cases: list[TestCase] = []
 
 

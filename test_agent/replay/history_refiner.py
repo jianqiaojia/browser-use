@@ -18,14 +18,11 @@ logger = logging.getLogger(__name__)
 
 # 绝对不能删除的自定义 action 类型（业务关键，有副作用或状态依赖）
 _PROTECTED_ACTION_TYPES = {
-	'clear_site_data',
 	'logmonitor_init',
 	'logmonitor_wait_for_state',
 	'logmonitor_get_filter_results',
 	'uia_wait_for_popup',
 	'uia_select_autofill',
-	'email_mark_baseline',
-	'get_email_verification_code',
 }
 
 
@@ -39,10 +36,6 @@ def _get_action_type(step_dict: dict[str, Any]) -> str | None:
 		keys = [k for k in first if k != 'interacted_element']
 		return keys[0] if keys else None
 	return None
-
-
-def _get_url(step_dict: dict[str, Any]) -> str:
-	return (step_dict.get('state') or {}).get('url') or ''
 
 
 def _has_error(step_dict: dict[str, Any]) -> bool:
@@ -92,15 +85,15 @@ def rule_clean(history_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
 			logger.debug(f'[rule_clean] drop failed step: {action_type}')
 			continue
 
-		# 3. 连续重复点击同一元素
+		# 3. 连续重复操作同一元素（click 或 input_text）
 		curr_hash = _interacted_element_stable_hash(step)
 		if (
 			curr_hash is not None
 			and curr_hash == prev_hash
 			and action_type == prev_action_type
-			and action_type == 'click'
+			and action_type in ('click', 'input_text')
 		):
-			logger.debug(f'[rule_clean] drop duplicate click step (hash={curr_hash})')
+			logger.debug(f'[rule_clean] drop duplicate {action_type} step (hash={curr_hash})')
 			continue
 
 		# 4. 纯观察步骤（extract/screenshot，无元素交互）
@@ -132,7 +125,6 @@ def _build_step_summary(step: dict[str, Any], idx: int) -> dict[str, Any]:
 		'step_index': idx,
 		'goal': model_output.get('next_goal') or '',
 		'action_type': action_type,
-		'element_tag': (elem or {}).get('node_name') if elem else None,
 		'element_ax_name': (elem or {}).get('ax_name') if elem else None,
 		'element_xpath': (elem or {}).get('x_path') if elem else None,
 		'url': state.get('url') or '',
@@ -148,20 +140,19 @@ def _build_step_summary(step: dict[str, Any], idx: int) -> dict[str, Any]:
 _REFINE_SYSTEM_PROMPT = """\
 CRITICAL INSTRUCTION: You MUST output ONLY a single raw JSON object. No markdown, no explanation, no code fences, no Chinese text, no analysis report. ONLY the JSON object itself.
 
-You are a browser automation test engineer. Given a cleaned browser action history (JSON), find steps that can be safely removed to shorten the path while keeping the task completable.
+You are a browser automation test engineer. Given a browser action history on the checkout page (JSON), your job is to find steps that can be safely removed to produce the shortest correct path that still fully accomplishes the task.
 
 HARD CONSTRAINTS — never delete:
 1. Steps where is_protected=true
 2. Steps where result_success=false
-3. Steps that change the URL (url differs from previous step)
-4. The first step (index 0) and the last step
+3. The last step
 
 CANDIDATES for deletion:
-- Scroll steps on the same page not required by subsequent steps
+- Scroll steps not required by subsequent steps
 - Repeated open/close of the same dropdown
 - Dead-end exploration steps (navigated away and came back)
 - Observation-only steps (screenshot/extract with no side effects)
-- Steps that pursue a sub-goal that was already satisfied earlier in the history (the agent completed the same objective twice) — keep the first successful path, delete the redundant second attempt
+- Steps that pursue a sub-goal already satisfied earlier (keep the first success, delete the redundant repeat)
 
 OUTPUT FORMAT — raw JSON only, nothing else:
 {"can_delete": [2, 5, 7], "reasons": {"2": "reason", "5": "reason", "7": "reason"}}
@@ -204,15 +195,7 @@ async def llm_refine(
 		raw = completion.completion.strip()
 		logger.debug(f'[llm_refine] raw response: {raw[:300]}')
 
-		# 剥离 markdown 代码块（```json ... ``` 或 ``` ... ```）
-		if '```' in raw:
-			lines = raw.splitlines()
-			raw = '\n'.join(
-				line for line in lines
-				if not line.strip().startswith('```')
-			).strip()
-
-		# 提取 JSON（LLM 可能在 JSON 前后有多余文字）
+		# 提取 JSON（忽略 markdown 包装和前后多余文字）
 		start = raw.find('{')
 		end = raw.rfind('}') + 1
 		if start == -1 or end == 0:
@@ -250,10 +233,9 @@ async def llm_refine(
 
 async def verify_with_rerun(
 	refined_history: AgentHistoryList,
-	task: str,
+	llm: Any,
 	browser_profile: BrowserProfile,
 	tools: Tools,
-	max_steps: int = 60,
 ) -> bool:
 	"""
 	用精炼后的 history 跑一次 Agent.rerun() 验证。
@@ -264,8 +246,8 @@ async def verify_with_rerun(
 	logger.info(f'[verify] running rerun() with {len(refined_history.history)} steps...')
 	try:
 		agent = Agent(
-			task=task,
-			llm=None,  # rerun 不需要 LLM
+			task='verify',
+			llm=llm,
 			browser_profile=browser_profile,
 			tools=tools,
 		)
@@ -288,7 +270,6 @@ async def verify_with_rerun(
 
 async def refine(
 	history: AgentHistoryList,
-	task: str,
 	llm: Any,
 	browser_profile: BrowserProfile,
 	tools: Tools,
@@ -299,7 +280,6 @@ async def refine(
 
 	Args:
 		history: LLM 探索产生的原始 AgentHistoryList
-		task: 测试任务描述（用于 rerun 验证时传给 Agent）
 		llm: LLM 实例（用于语义精炼）
 		browser_profile: 浏览器配置（用于 rerun 验证）
 		tools: 已注册自定义 actions 的 Tools 实例
@@ -332,7 +312,7 @@ async def refine(
 		logger.info('[refine] skipping verify (skip_verify=True)')
 		final_history = refined_history
 	else:
-		ok = await verify_with_rerun(refined_history, task, browser_profile, tools)
+		ok = await verify_with_rerun(refined_history, llm, browser_profile, tools)
 		if ok:
 			final_history = refined_history
 		else:

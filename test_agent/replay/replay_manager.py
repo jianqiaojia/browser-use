@@ -1,12 +1,12 @@
 """
 ReplayManager：管理 replay.json 的读写，封装 rerun() 失败处理与断点续跑逻辑。
 
-核心设计：
-  - replay.json 存储精炼后的 AgentHistoryList（browser-use 原生格式）
-  - rerun() 失败时浏览器保持打开，LLM 从当前页面状态续跑
-  - 续跑产生的 tail history 经 HistoryRefiner 精炼后合并回 replay.json
+职责范围（仅 Phase 2 checkout）：
+  - replay 模式：存在 replay.json，直接 rerun()；失败时 LLM 断点续跑（heal）并合并。
+  - explore 模式：不存在 replay.json，LLM 完整探索，精炼后保存。
+
+Phase 1 (pre-checkout) 由调用方负责，BrowserSession 以参数形式传入。
 """
-import asyncio
 import logging
 import re
 import time
@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from browser_use import Agent, BrowserProfile, BrowserSession, Tools
-from browser_use.agent.views import AgentHistory, AgentHistoryList, ActionResult
+from browser_use.agent.views import AgentHistoryList
 
 from test_agent.config import config
-from test_agent.replay.history_refiner import refine, _PROTECTED_ACTION_TYPES, _get_action_type
+from test_agent.replay.history_refiner import refine
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +64,19 @@ class ReplayManager:
 	"""
 	管理测试用例的精炼回放生命周期。
 
+	两阶段执行：
+	  Phase 1 (pre-checkout): LLM 每次全新执行 pre_checkout_task，抵达 checkout 页面后浏览器 session 保持打开。
+	  Phase 2 (checkout):     在同一 session 上，走 replay（存在 replay.json）或 explore（不存在）。
+
 	用法：
-		manager = ReplayManager(replay_path, task, llm, browser_profile, tools)
-		success = await manager.run()
+		manager = ReplayManager(replay_path, checkout_task, llm, browser_profile, tools)
+		success = await manager.run(browser_session)
 	"""
 
 	def __init__(
 		self,
 		replay_path: Path | str,
-		task: str,
+		checkout_task: str,
 		llm: Any,
 		browser_profile: BrowserProfile,
 		tools: Tools,
@@ -82,7 +86,7 @@ class ReplayManager:
 		rerun_max_step_interval: float | None = None,
 	):
 		self.replay_path = Path(replay_path)
-		self.task = task
+		self.checkout_task = checkout_task
 		self.llm = llm
 		self.browser_profile = browser_profile
 		self.tools = tools
@@ -91,54 +95,47 @@ class ReplayManager:
 		self.rerun_delay_between_actions = rerun_delay_between_actions if rerun_delay_between_actions is not None else config.rerun_delay_between_actions
 		self.rerun_max_step_interval = rerun_max_step_interval if rerun_max_step_interval is not None else config.rerun_max_step_interval
 
-	async def run(self) -> bool:
+	def _make_agent(self, browser_session: BrowserSession) -> Agent:
+		"""构造 Agent，共享同一 browser_session。"""
+		return Agent(
+			task=self.checkout_task,
+			llm=self.llm,
+			browser_profile=self.browser_profile,
+			browser_session=browser_session,
+			tools=self.tools,
+			max_actions_per_step=config.max_actions_per_step,
+		)
+
+	async def run(self, browser_session: BrowserSession) -> bool:
 		"""
-		主入口：根据 replay.json 是否存在，走探索模式或回放模式。
+		Phase 2 主入口：在传入的 browser_session 上执行 checkout。
+
+		- replay 模式：存在 replay.json，直接 rerun()；失败时 LLM heal 并合并。
+		- explore 模式：不存在 replay.json，LLM 完整探索，精炼后保存。
+
+		Args:
+			browser_session: 已启动的浏览器 session（由调用方管理生命周期）
 
 		Returns:
 			True 表示测试通过，False 表示失败
 		"""
 		replay = _load_replay(self.replay_path, self.tools)
-
 		if replay is None:
-			logger.info('[ReplayManager] no replay.json → entering LLM explore mode')
-			result = await self._explore_and_refine(save_path=self.replay_path)
+			logger.info('[ReplayManager] no replay.json → LLM explore checkout')
+			return await self._explore_and_refine(save_path=self.replay_path, browser_session=browser_session)
 		else:
-			logger.info(f'[ReplayManager] replay.json found ({len(replay.history)} steps) → entering replay mode')
-			result = await self._replay_with_healing(replay)
-
-		return result
-
-	async def explore(self, dry_run: bool = False) -> bool:
-		"""
-		强制探索模式：LLM 跑完后精炼。
-
-		Args:
-			dry_run: True → 只跑 LLM，不精炼，不存文件（验证 task 描述是否合理）；
-			         False → LLM 跑完后精炼，直接覆盖 replay.json
-		"""
-		if dry_run:
-			logger.info('[ReplayManager] explore mode → dry run, skip refine, result will NOT be saved')
-		else:
-			logger.info(f'[ReplayManager] explore-and-refine mode → will refine and overwrite {self.replay_path.name}')
-		save_path = None if dry_run else self.replay_path
-		return await self._explore_and_refine(save_path=save_path, dry_run=dry_run)
+			logger.info(f'[ReplayManager] replay.json found ({len(replay.history)} steps) → replay checkout')
+			return await self._replay_with_healing(replay, browser_session=browser_session)
 
 	# ------------------------------------------------------------------
-	# 探索模式：LLM 完整跑一遍，然后精炼，存 replay.json
+	# Phase 2 探索模式：LLM 完整跑一遍，然后精炼，存 replay.json
 	# ------------------------------------------------------------------
 
-	async def _explore_and_refine(self, save_path: Path | None, dry_run: bool = False) -> bool:
-		"""LLM 完整探索，精炼后存到 save_path。dry_run=True 时跳过精炼，不存文件。"""
-		logger.info('[ReplayManager] starting LLM explore...')
+	async def _explore_and_refine(self, save_path: Path, browser_session: BrowserSession) -> bool:
+		"""Phase 2 LLM explore checkout_task，精炼后存到 save_path。"""
+		logger.info('[ReplayManager] starting LLM explore (checkout)...')
 
-		agent = Agent(
-			task=self.task,
-			llm=self.llm,
-			browser_profile=self.browser_profile,
-			tools=self.tools,
-			max_actions_per_step=config.max_actions_per_step,
-		)
+		agent = self._make_agent(browser_session)
 
 		try:
 			raw_history = await agent.run(max_steps=self.max_steps)
@@ -157,22 +154,16 @@ class ReplayManager:
 			logger.warning('[ReplayManager] LLM explore did not succeed, not saving replay')
 			return False
 
-		if dry_run:
-			logger.info('[ReplayManager] explore dry-run complete, skipping refine, result not saved')
-			return True
-
 		# 精炼（跳过 rerun 验证，因为刚跑完，页面状态已变）
 		logger.info('[ReplayManager] refining history...')
 		refined = await refine(
 			raw_history,
-			task=self.task,
 			llm=self.llm,
 			browser_profile=self.browser_profile,
 			tools=self.tools,
 			skip_verify=True,  # 首次不验证，下次回放时会验证
 		)
 
-		assert save_path is not None
 		_save_replay(refined, save_path)
 		return True
 
@@ -180,36 +171,23 @@ class ReplayManager:
 	# 回放模式：直接 rerun()，失败时断点续跑
 	# ------------------------------------------------------------------
 
-	async def _replay_with_healing(self, replay: AgentHistoryList) -> bool:
+	async def _replay_with_healing(self, replay: AgentHistoryList, browser_session: BrowserSession) -> bool:
 		"""
 		执行回放，失败时启动 LLM 断点续跑 + 精炼合并。
 
 		关键：浏览器 session 在两个 Agent 之间共享，不关闭。
 		"""
-		# 创建共享的 BrowserSession，keep_alive=True 防止 rerun 失败时 session 被 reset
-		# heal agent 需要看到失败那一刻的真实页面状态
-		heal_profile = self.browser_profile.model_copy(update={'keep_alive': True})
-		browser_session = BrowserSession(browser_profile=heal_profile)
-		await browser_session.start()
+		failed_step_index = await self._try_rerun(replay, browser_session)
 
-		try:
-			failed_step_index = await self._try_rerun(replay, browser_session)
+		if failed_step_index is None:
+			# 回放成功
+			logger.info('[ReplayManager] replay succeeded ✅')
+			return True
 
-			if failed_step_index is None:
-				# 回放成功
-				logger.info('[ReplayManager] replay succeeded ✅')
-				return True
-
-			# 回放失败，LLM 断点续跑
-			logger.info(f'[ReplayManager] replay failed at step {failed_step_index}, starting LLM heal...')
-			healed = await self._heal(replay, failed_step_index, browser_session)
-			return healed
-
-		finally:
-			try:
-				await browser_session.stop()
-			except Exception:
-				pass
+		# 回放失败，LLM 断点续跑
+		logger.info(f'[ReplayManager] replay failed at step {failed_step_index}, starting LLM heal...')
+		healed = await self._heal(replay, failed_step_index, browser_session)
+		return healed
 
 	async def _try_rerun(
 		self,
@@ -222,13 +200,8 @@ class ReplayManager:
 		Returns:
 			None 表示成功；int 表示失败的 step index（在 replay.history 中的位置）
 		"""
-		agent = Agent(
-			task=self.task,
-			llm=self.llm,
-			browser_profile=self.browser_profile,
-			browser_session=browser_session,
-			tools=self.tools,
-		)
+		# rerun_history() 是确定性回放，不调用 LLM，llm 参数仅为 Agent 构造要求
+		agent = self._make_agent(browser_session)
 
 		try:
 			t0 = time.perf_counter()
@@ -275,14 +248,8 @@ class ReplayManager:
 		logger.info(f'[ReplayManager] LLM taking over from step {failed_step_index}...')
 
 		# 用共享 browser_session 启动续跑 agent
-		# task 保持原始任务，LLM 会根据当前页面状态自行判断剩余工作
-		agent = Agent(
-			task=self.task,
-			llm=self.llm,
-			browser_profile=self.browser_profile,
-			browser_session=browser_session,
-			tools=self.tools,
-		)
+		# checkout_task 保持原始任务，LLM 会根据当前页面状态自行判断剩余工作
+		agent = self._make_agent(browser_session)
 
 		try:
 			tail_history = await agent.run(max_steps=self.max_steps)
@@ -305,7 +272,6 @@ class ReplayManager:
 		logger.info('[ReplayManager] refining tail history...')
 		refined_tail = await refine(
 			tail_history,
-			task=self.task,
 			llm=self.llm,
 			browser_profile=self.browser_profile,
 			tools=self.tools,
@@ -314,27 +280,12 @@ class ReplayManager:
 
 		# 合并：保留 replay 前 failed_step_index 步 + 精炼后的 tail
 		head_steps = replay.history[:failed_step_index]
-
-		# 去重：tail 开头若与 head 末尾 action_type 相同（且是有状态 action），跳过
-		head_action_types = {
-			_get_action_type(h.model_dump())
-			for h in head_steps
-		}
-		tail_steps = refined_tail.history
-		deduped_tail = []
-		for h in tail_steps:
-			at = _get_action_type(h.model_dump())
-			if at in _PROTECTED_ACTION_TYPES and at in head_action_types:
-				logger.info(f'[ReplayManager] dedup: skipping tail step "{at}" already in head')
-				continue
-			deduped_tail.append(h)
-			# 一旦遇到非重复步骤，后续不再去重（只去头部重复）
-			head_action_types.discard(at)
-		merged = AgentHistoryList(history=head_steps + deduped_tail)
+		if failed_step_index == 0:
+			logger.info('[ReplayManager] first step failed, merged replay is tail-only (full replacement)')
+		merged = AgentHistoryList(history=head_steps + refined_tail.history)
 
 		logger.info(
-			f'[ReplayManager] merged: head={len(head_steps)} + tail={len(deduped_tail)} '
-			f'(refined={len(refined_tail.history)}) = {len(merged.history)} steps'
+			f'[ReplayManager] merged: head={len(head_steps)} + tail={len(refined_tail.history)} = {len(merged.history)} steps'
 		)
 
 		# heal 成功本身即验证，直接保存

@@ -2,10 +2,13 @@
 
 ## 背景
 
-当前架构每个 checkout 测试需要 20+ 个 LLM step，每步 5-8s，总耗时 100-160s。
-目标是建立一个全自动精炼闭环：首次由 LLM 探索执行，自动精炼出最短有效路径写入
-`replay.json`，后续直接回放（无 LLM，~40s）；回放失败时 LLM 断点续跑，
-自动精炼新段并合并，全程无人工介入。
+当前架构每个 checkout 测试需要 LLM 探索执行，总耗时 80-160s。
+目标是建立全自动精炼闭环：首次 LLM 探索，自动精炼出最短有效路径写入 `replay.json`，
+后续直接回放（无 LLM，~25s）；回放失败时 LLM 断点续跑，自动精炼新段并合并，全程无人工介入。
+
+**实测数据（Nike_autofill_Guest，checkout 阶段）：**
+- explore（首次）：83.2s，5步 LLM 探索 → 精炼 → 存 replay.json
+- replay（后续）：24.7s，确定性 rerun，无 LLM 推理，快 3.4×
 
 ---
 
@@ -30,13 +33,15 @@
 验证剪枝理论上能找到最优最短路径，但在本场景有致命约束：
 
 - Nike 真实网站有 Akamai 反爬，短时间内重复访问 checkout 15 次会触发封禁
-- autofill 触发状态不可回滚，每次验证需完整从头跑一遍（100-160s × N 次）
+- autofill 触发状态不可回滚，每次验证需完整从头跑一遍（80-160s × N 次）
 - 代价比全量重跑高一个量级，且稳定性更差
 
 ### 选定方案：LLM 语义精炼 + 单次回放验证
 
 ```
-LLM 探索完（20步 history）
+LLM 探索完（N步 history）
+    ↓
+规则清洗（零成本）→ 删除明确无用步骤
     ↓
 LLM 语义分析（1次调用）→ 输出可删除的 step index 列表
     ↓
@@ -48,16 +53,15 @@ LLM 语义分析（1次调用）→ 输出可删除的 step index 列表
 
 代价：1次 LLM 调用 + 1次完整回放，相比验证剪枝节省 90% 时间。
 
-### 为什么 replay_steps 存 history.json 而不是 test.json
+### 为什么 replay.json 只录制 checkout 阶段
 
-`AgentHistoryList` 是 browser-use 原生格式，含完整的 `DOMInteractedElement`
-（`x_path`、`stable_hash`、`ax_name`、`attributes`），直接驱动 `Agent.rerun_history()`
-的 6 级元素 fallback 匹配。test.json 里的 `replay_steps`（`TestCaseReplayStep`
-模型）是旧设计，字段不完整，不具备驱动 rerun 的能力。
+pre-checkout 阶段（登录、管理购物车、导航至 checkout）在不同运行间高度不稳定：
+商品可能售罄、cart 状态各不相同、登录需要验证码。把这些步骤录入 replay.json
+会导致回放在第一步就失败，自愈意义丧失。
 
-**实际数据流：**
-- 精炼后的黄金路径存为 `test_case/{test_case_name}.replay.json`（`AgentHistoryList` 格式）
-- `test.json` 的 `replay_steps` 字段保持为空，不使用
+**决策**：执行分为两阶段——
+- **Phase 1**：LLM 每次全新执行 `pre_checkout_task`，到达 checkout 页面后结束，不录制
+- **Phase 2**：在同一浏览器 session 上，对 checkout 交互走 replay / explore，只录制这部分
 
 ---
 
@@ -68,32 +72,33 @@ LLM 语义分析（1次调用）→ 输出可删除的 step index 列表
 ```
 test_runner.py 启动
     ↓
-检查 logs/{name}.replay.json 是否存在？
+构建 pre_checkout_task / checkout_task（纯字符串，无副作用）
+    ↓
+启动 BrowserSession(keep_alive=True)
+    ↓
+Phase 1: LLM 执行 pre_checkout_task（每次全新跑，不录制）
+    ↓ 到达 checkout 页面，浏览器 session 保持打开
+Phase 2: 检查 {name}.replay.json 是否存在？
     │
-    ├── 不存在 → LLM 完整探索 → HistoryRefiner 精炼 → 存 replay.json
+    ├── 不存在 → LLM explore checkout_task → HistoryRefiner 精炼 → 存 replay.json
     │
     └── 存在 → ReplayManager.rerun_history()
                     ↓
-                成功 → 完成（~40s）
+                成功 → 完成（~25s）
                 失败（step K）→ 浏览器保持打开
                     ↓
-                LLM 从当前页面状态续跑剩余任务
+                LLM 从当前页面状态续跑剩余 checkout 任务
                     ↓
                 新 tail history → HistoryRefiner 精炼 tail
                     ↓
-                合并：replay[:K] + refined_tail
-                    ↓
-                单次 rerun() 验证合并结果
-                    ↓
-                通过 → 写回 replay.json
-                失败 → 写入未精炼合并版（兜底）
+                合并：replay[:K] + refined_tail → 写回 replay.json
 ```
 
 ### 核心组件
 
 #### HistoryRefiner（`test_agent/replay/history_refiner.py`）
 
-**职责**：把含弯路的 `AgentHistoryList` 精炼为最短有效路径。
+**职责**：把含弯路的 `AgentHistoryList`（checkout 阶段）精炼为最短有效路径。
 
 **步骤 1：规则清洗（零成本，无需 LLM）**
 
@@ -108,9 +113,8 @@ test_runner.py 启动
 将清洗后的 history 序列化为结构化摘要喂给 LLM，输出可删除的 step index。
 
 硬性约束（LLM 不得违反）：
-- `url_before != url_after` → 绝对不能删
-- `result_error != null` → 绝对不能删
-- `action_type` 为 `uia_*` / `logmonitor_*` / `clear_site_data` 等自定义关键 actions → 绝对不能删
+- `is_protected=true`（`action_type` 为 `uia_*` / `logmonitor_*`）→ 绝对不能删
+- `result_success=false` → 绝对不能删
 - 第一步和最后一步 → 绝对不能删
 
 **步骤 3：单次 rerun() 验证**
@@ -123,12 +127,12 @@ test_runner.py 启动
 
 #### ReplayManager（`test_agent/replay/replay_manager.py`）
 
-**职责**：管理 replay.json 的读写，封装 rerun_history() 的失败处理与断点续跑逻辑。
+**职责**：Phase 2 checkout 的 replay/explore/heal 生命周期管理。Phase 1 由调用方负责，`BrowserSession` 以参数形式传入。
 
 **关键设计：rerun() 失败时不关闭浏览器**
 
-`ReplayManager` 创建共享 `BrowserSession`，传给 rerun Agent 和 heal Agent，
-失败后 `BrowserSession` 保持打开，LLM 接管时看到的是失败那一刻的真实页面状态。
+`BrowserSession` 由 `test_runner.py` 创建并传入，rerun 失败后保持打开，
+LLM heal agent 接管时看到的是失败那一刻的真实页面状态。
 
 **rerun() 失败判断**
 
@@ -142,8 +146,6 @@ test_runner.py 启动
 - `RERUN_DELAY_BETWEEN_ACTIONS = 1.0`（每步固定等待）
 - `RERUN_MAX_STEP_INTERVAL = 3.0`（压缩 LLM 探索时的 saved interval，默认上限 45s）
 
-实测：11步 Signed In 流程从 LLM 探索的 ~160s 压缩到回放 ~40s。
-
 ---
 
 ### 文件结构
@@ -152,14 +154,15 @@ test_runner.py 启动
 test_agent/
 ├── replay/
 │   ├── history_refiner.py    # HistoryRefiner
-│   └── replay_manager.py     # ReplayManager
+│   └── replay_manager.py     # ReplayManager（Phase 2 only）
 ├── test_case/
 │   ├── nike.test.json                            # 测试用例定义
-│   ├── nike_autofill_guest.replay.json           # 精炼后黄金路径（12步）
-│   └── nike_autofill_signed_in.replay.json       # 精炼后黄金路径（11步）
-├── logs/                                         # 运行日志（预留）
+│   ├── pre_checkout_preamble.txt                 # Phase 1 task 模板
+│   ├── checkout_preamble.txt                     # Phase 2 task 模板
+│   ├── nike_autofill_guest.replay.json           # 精炼后黄金路径（5步）
+│   └── nike_autofill_signed_in.replay.json       # 精炼后黄金路径（checkout 阶段）
 ├── config.py                                     # 所有配置集中管理（含 replay 参数）
-└── test_runner.py                                # 集成 ReplayManager，输出耗时日志
+└── test_runner.py                                # 两阶段执行，输出耗时日志
 ```
 
 ---
@@ -174,7 +177,7 @@ test_agent/
 
 | 组件 | 文件 | 用途 |
 |------|------|------|
-| LLM 执行引擎 | `test_runner.py` | 探索模式 + 续跑模式 |
+| LLM 执行引擎 | `test_runner.py` | 两阶段执行，Phase 1 LLM + Phase 2 replay/explore |
 | Agent.rerun_history() | `browser_use/agent/service.py` | 回放驱动，6级元素 fallback |
 | AgentHistoryList | `browser_use/agent/views.py` | replay.json 格式，save/load |
 | DOMInteractedElement | `browser_use/dom/views.py` | 含 x_path、stable_hash、ax_name |
@@ -183,4 +186,4 @@ test_agent/
 
 ---
 
-**维护日期**：2026-03-31
+**维护日期**：2026-04-01
