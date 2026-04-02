@@ -1,6 +1,7 @@
 {
     "domain": "https://www.nike.com",
     "site_pre_checkout_guidance": [
+        "If the cart already has a valid item, navigate directly to the checkout URL (e.g. https://www.nike.com/checkout) to skip the product flow.",
         "Before evaluating cart state, wait 3 seconds for the page to finish loading; ensure the cart has exactly one valid item — remove unavailable items (sold out/out of stock) or extra items; if empty, add any available product.",
         "Prefer products with high stock availability — avoid items marked 'Just a few left', 'Low stock', or 'Sold Out'. Choose a common size (M or 10) to reduce sold-out risk."
     ],
@@ -12,12 +13,10 @@
         {
             "name": "Nike_autofill_Guest",
             "profile": "guest_with_cookie",
-            "replay_mode": "precheckout_skip__checkout_replay",
             "pre_checkout_instructions": ["You must be signed out — do not sign in at any point during this test."]
         },
         {
             "name": "Nike_autofill_Signed_In",
-            "replay_mode": "precheckout_llm__checkout_replay",
             "preconditions": "Edge must have exactly one fully valid saved address, plus 5 profiles each with one invalid field (name='1', zip='1', phone='1', invalid email format, city='1').",
             "pre_checkout_instructions": [
                 "You must be signed in before reaching checkout. Sign in using email 'happyautoec@outlook.com' and password 'Happy@1234'. Prefer use verification code sent to email over password entry when possible."

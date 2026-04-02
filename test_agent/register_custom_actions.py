@@ -16,7 +16,7 @@ from test_agent.actions.email_verification import register_email_verification
 
 def register_custom_actions(tools: Tools) -> None:
 	"""Register all custom actions for test automation."""
-	register_os_click(tools.registry)
+	# register_os_click(tools.registry)
 	register_cdp_click(tools.registry)
 	register_clear_site_data(tools.registry)
 	register_uia_autofill(tools.registry)

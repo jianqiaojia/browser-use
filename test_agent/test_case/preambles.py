@@ -5,7 +5,7 @@ pre_checkout = """\
 You are a browser automation expert.
 
 # Goal
-Go to {--Domain--} and reach a valid checkout state — do whatever the site requires. Do not give up unless it is truly impossible.
+Go to {--Domain--} and reach a ready-to-checkout state — do whatever the site requires. Do not give up unless it is truly impossible.
 Once the checkout page is loaded and ready, your job is done.
 
 # Instructions
@@ -38,8 +38,7 @@ Instructions below are hard constraints — follow them strictly.
 
 # Tools
 The following custom tools are available — prefer them over manual browser interaction whenever applicable:
-- cdp_click: click an input field to trigger Edge autofill popup (handles window focus automatically)
-- os_click: OS-level mouse click that bypasses browser detection (use if cdp_click fails)
+- cdp_click: click an input field to trigger Edge autofill popup (handles window focus automatically); 
 - uia_wait_for_popup: wait until the Edge Express Checkout autofill popup is visible
 - uia_select_autofill: click the autofill button in the popup to fill the form
 - logmonitor_init: initialize log monitor — call this before triggering the popup

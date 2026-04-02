@@ -1,11 +1,9 @@
 """
 ReplayManager：管理单个测试用例的完整执行（pre-checkout + checkout replay/explore）。
 
-执行策略由 ReplayMode 决定：
-  precheckout_skip__checkout_replay  : 跳过 pre-checkout，直接从 checkout 页面 rerun()
-  precheckout_llm__checkout_replay   : pre-checkout LLM + checkout rerun()
-  fully_llm                          : Phase 1 + Phase 2 全 LLM，不 refine，作为兜底
-  auto                               : 有 replay.json 就 rerun，没有就 explore
+执行逻辑：
+  有 replay.json → pre-checkout LLM + checkout rerun（+ heal on failure）
+  无 replay.json → pre-checkout LLM + checkout LLM explore + refine，结果存 replay.json
 """
 import logging
 import re
@@ -14,11 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from browser_use import Agent, BrowserProfile, BrowserSession, Tools
-from browser_use.agent.views import ActionResult, AgentHistory, AgentHistoryList, StepMetadata
-from browser_use.browser.views import BrowserStateHistory, TabInfo
+from browser_use.agent.views import AgentHistoryList
 
 from test_agent.config import config
-from test_agent.models import ReplayMode
 from test_agent.replay.history_refiner import refine
 
 logger = logging.getLogger(__name__)
@@ -38,39 +34,6 @@ def _load_replay(replay_path: Path, tools: Tools) -> AgentHistoryList | None:
 	except Exception as e:
 		logger.warning(f'[ReplayManager] failed to load {replay_path}: {e}')
 		return None
-
-
-def _prepend_navigate_step(history: AgentHistoryList, url: str, tools: Tools) -> AgentHistoryList:
-	"""
-	Prepend a synthetic navigate step to history so rerun() can start from a blank page.
-
-	When explore records from an already-loaded checkout page, no goto/navigate step exists.
-	On precheckout_skip rerun the browser starts blank, so we inject this step at index 0.
-	"""
-	import time as _time
-	from browser_use.agent.views import AgentOutput
-
-	action_model = tools.registry.create_action_model()
-	output_model = AgentOutput.type_with_custom_actions(action_model)
-
-	# Construct the action as a dict and validate through the dynamic ActionModel union
-	navigate_action = action_model.model_validate({'navigate': {'url': url, 'new_tab': False}})
-
-	now = _time.time()
-	navigate_output = output_model(
-		evaluation_previous_goal='',
-		memory='',
-		next_goal=f'Navigate to checkout page: {url}',
-		action=[navigate_action],
-	)
-	navigate_step = AgentHistory(
-		model_output=navigate_output,
-		result=[ActionResult(extracted_content=f'Navigated to {url}')],
-		state=BrowserStateHistory(url=url, title='', tabs=[], interacted_element=[None]),
-		metadata=StepMetadata(step_start_time=now, step_end_time=now, step_number=0, step_interval=0.0),
-	)
-	logger.info(f'[ReplayManager] prepended navigate step → {url}')
-	return AgentHistoryList(history=[navigate_step] + history.history)
 
 
 def _save_replay(history: AgentHistoryList, replay_path: Path) -> None:
@@ -97,15 +60,10 @@ def _extract_failed_step_index(error_msg: str) -> int | None:
 
 class ReplayManager:
 	"""
-	管理单个测试用例的完整执行：pre-checkout（按需）+ checkout replay/explore。
-
-	执行策略：
-	  precheckout_llm__checkout_replay   : pre-checkout LLM + checkout rerun()（默认）
-	  precheckout_skip__checkout_replay  : 跳过 pre-checkout，直接从 checkout 页面 rerun()
-	  fully_llm                          : Phase 1 + Phase 2 全 LLM，不 refine，作为兜底
+	管理单个测试用例的完整执行：pre-checkout LLM + checkout rerun/explore。
 
 	用法：
-		manager = ReplayManager(pre_checkout_task, checkout_task, replay_path, llm, browser_profile, tools, replay_mode)
+		manager = ReplayManager(pre_checkout_task, checkout_task, replay_path, llm, browser_profile, tools)
 		success = await manager.run(browser_session)
 	"""
 
@@ -117,7 +75,6 @@ class ReplayManager:
 		llm: Any,
 		browser_profile: BrowserProfile,
 		tools: Tools,
-		replay_mode: ReplayMode = ReplayMode.PRECHECKOUT_LLM__CHECKOUT_REPLAY,
 		max_steps: int | None = None,
 		rerun_max_retries: int | None = None,
 		rerun_delay_between_actions: float | None = None,
@@ -129,7 +86,6 @@ class ReplayManager:
 		self.llm = llm
 		self.browser_profile = browser_profile
 		self.tools = tools
-		self.replay_mode = replay_mode
 		self.max_steps = max_steps if max_steps is not None else config.max_steps
 		self.rerun_max_retries = rerun_max_retries if rerun_max_retries is not None else config.rerun_max_retries
 		self.rerun_delay_between_actions = rerun_delay_between_actions if rerun_delay_between_actions is not None else config.rerun_delay_between_actions
@@ -158,23 +114,9 @@ class ReplayManager:
 			max_actions_per_step=config.max_actions_per_step,
 		)
 
-	def _should_run_pre_checkout(self) -> bool:
-		"""
-		Returns True if pre-checkout LLM should run before checkout.
-
-		No replay.json → always True (browser starts blank, needs LLM to navigate first).
-		PRECHECKOUT_SKIP → False (session already at checkout page via cookie).
-		PRECHECKOUT_LLM / FULLY_LLM → True.
-		"""
-		if not self.replay_path.exists():
-			return True
-		if self.replay_mode == ReplayMode.PRECHECKOUT_SKIP__CHECKOUT_REPLAY:
-			return False
-		return True
-
 	async def run(self, browser_session: BrowserSession) -> bool:
 		"""
-		执行完整测试：pre-checkout（按需，见 _should_run_pre_checkout）+ checkout replay/explore。
+		执行完整测试：pre-checkout LLM + checkout rerun/explore。
 
 		Args:
 			browser_session: 已启动的浏览器 session（由调用方管理生命周期）
@@ -182,69 +124,41 @@ class ReplayManager:
 		Returns:
 			True 表示测试通过，False 表示失败
 		"""
-		run_pre_checkout = self._should_run_pre_checkout()
+		t0 = time.perf_counter()
+		print('[ReplayManager] [pre-checkout] starting...')
+		pre_checkout_agent = Agent(
+			task=self.pre_checkout_task,
+			llm=self.llm,
+			browser_profile=self.browser_profile,
+			browser_session=browser_session,
+			tools=self.tools,
+			max_actions_per_step=config.max_actions_per_step,
+		)
+		pre_checkout_history = await pre_checkout_agent.run(max_steps=self.max_steps)
+		if not pre_checkout_history or not pre_checkout_history.is_successful():
+			print('[ReplayManager] [pre-checkout] ❌ failed')
+			return False
+		print(f'[ReplayManager] [pre-checkout] ✅ done ({len(pre_checkout_history.history)} steps, {time.perf_counter()-t0:.1f}s)')
 
-		print(f"[ReplayManager] mode={self.replay_mode.value} → {'running pre-checkout' if run_pre_checkout else 'skipping pre-checkout'}")
-
-		if run_pre_checkout:
-			t0 = time.perf_counter()
-			print("[ReplayManager] [pre-checkout] starting...")
-			pre_checkout_agent = Agent(
-				task=self.pre_checkout_task,
-				llm=self.llm,
-				browser_profile=self.browser_profile,
-				browser_session=browser_session,
-				tools=self.tools,
-				max_actions_per_step=config.max_actions_per_step,
-			)
-			pre_checkout_history = await pre_checkout_agent.run(max_steps=self.max_steps)
-			if not pre_checkout_history or not pre_checkout_history.is_successful():
-				print("[ReplayManager] [pre-checkout] ❌ failed")
-				return False
-			print(f"[ReplayManager] [pre-checkout] ✅ done ({len(pre_checkout_history.history)} steps, {time.perf_counter()-t0:.1f}s)")
-
-		phase_label = 'checkout' if run_pre_checkout else 'checkout (direct)'
-		print(f"[ReplayManager] [checkout] {self.replay_path.name} ({phase_label})")
-		return await self._run_phase2(browser_session)
-
-	async def _run_phase2(self, browser_session: BrowserSession) -> bool:
-		"""Checkout 主逻辑：根据 replay_mode 决定 rerun / explore。"""
-		# FULLY_LLM: 全 LLM 兜底，不 refine，不保存 replay
-		if self.replay_mode == ReplayMode.FULLY_LLM:
-			logger.info('[ReplayManager] mode=fully_llm → LLM checkout (no refine)')
-			agent = self._make_agent(browser_session)
-			try:
-				history = await agent.run(max_steps=self.max_steps)
-			except Exception as e:
-				logger.error(f'[ReplayManager] fully_llm run failed: {e}')
-				return False
-			return bool(history and history.is_successful())
-
-		# PRECHECKOUT_LLM / PRECHECKOUT_SKIP: rerun，无 replay.json 则 explore 并录制
+		print(f'[ReplayManager] [checkout] {self.replay_path.name}')
+		t1 = time.perf_counter()
 		replay = _load_replay(self.replay_path, self.tools)
 		if replay is None:
-			logger.warning(f'[ReplayManager] {self.replay_mode.value} but no replay.json — falling back to LLM explore')
-			return await self._explore_and_refine(save_path=self.replay_path, browser_session=browser_session)
-		logger.info(f'[ReplayManager] {self.replay_mode.value} → rerun ({len(replay.history)} steps)')
-		return await self._run_rerun_with_heal(replay, browser_session)
+			logger.info('[ReplayManager] no replay.json → LLM explore')
+			success = await self._explore_and_refine(browser_session=browser_session)
+		else:
+			logger.info(f'[ReplayManager] {len(replay.history)} steps → rerun')
+			success = await self._run_rerun_with_heal(replay, browser_session)
+		print(f'[ReplayManager] [checkout] {"✅ done" if success else "❌ failed"} ({time.perf_counter()-t1:.1f}s)')
+		return success
 
 	# ------------------------------------------------------------------
 	# checkout 探索模式：LLM 完整跑一遍，然后精炼，存 replay.json
 	# ------------------------------------------------------------------
 
-	async def _explore_and_refine(self, save_path: Path, browser_session: BrowserSession) -> bool:
-		"""checkout LLM explore，精炼后存到 save_path。"""
+	async def _explore_and_refine(self, browser_session: BrowserSession) -> bool:
+		"""checkout LLM explore，精炼后存到 replay_path。"""
 		logger.info('[ReplayManager] starting LLM explore (checkout)...')
-
-		# Capture checkout URL before agent runs so we can prepend a navigate step to replay.json.
-		# This is critical for precheckout_skip mode: rerun starts from a blank page and needs
-		# the navigate action to reach the checkout URL before replaying the remaining steps.
-		checkout_url: str | None = None
-		try:
-			checkout_url = await browser_session.get_current_page_url()
-			logger.info(f'[ReplayManager] captured checkout URL: {checkout_url}')
-		except Exception as e:
-			logger.warning(f'[ReplayManager] failed to capture checkout URL: {e}')
 
 		agent = self._make_agent(browser_session)
 
@@ -265,21 +179,16 @@ class ReplayManager:
 			logger.warning('[ReplayManager] LLM explore did not succeed, not saving replay')
 			return False
 
-		# 精炼（跳过 rerun 验证，因为刚跑完，页面状态已变）
 		logger.info('[ReplayManager] refining history...')
 		refined = await refine(
 			raw_history,
 			llm=self.llm,
 			browser_profile=self.browser_profile,
 			tools=self.tools,
-			skip_verify=True,  # 首次不验证，下次回放时会验证
+			skip_verify=True,
 		)
 
-		# Prepend navigate step so rerun can start from blank page (precheckout_skip mode)
-		if checkout_url and checkout_url not in ('about:blank', 'chrome://newtab/', ''):
-			refined = _prepend_navigate_step(refined, checkout_url, self.tools)
-
-		_save_replay(refined, save_path)
+		_save_replay(refined, self.replay_path)
 		return True
 
 	# ------------------------------------------------------------------
@@ -344,7 +253,7 @@ class ReplayManager:
 			# No action errors — also sanity-check the AI summary
 			done_result = next((r for r in results if r and r.is_done), None)
 			if done_result is None or not done_result.success:
-				logger.warning(f'[ReplayManager] rerun finished but AI summary reports failure → triggering heal')
+				logger.warning('[ReplayManager] rerun finished but AI summary reports failure → triggering heal')
 				return len(replay.history) - 1
 
 			logger.info('[ReplayManager] all action results clean, AI summary reports success ✅')

@@ -63,112 +63,22 @@ pre-checkout 阶段（登录、管理购物车、导航至 checkout）在不同�
 - **Phase 1**：LLM 每次全新执行 `pre_checkout_task`，到达 checkout 页面后结束，不录制
 - **Phase 2**：在同一浏览器 session 上，对 checkout 交互走 replay / explore，只录制这部分
 
-### 三级降级策略（Tiered Degradation）
+### 为什么去掉 replay_mode 配置项
 
-对于支持全程 replay 的电商类 site，引入三级执行策略，在速度与稳定性之间自动权衡：
+早期设计了三种模式（`precheckout_skip`、`precheckout_llm`、`fully_llm`）允许 per-test-case override。
+实践中发现：
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Tier 1：全程 Replay（双 Profile，零 LLM）               │
-│  - 耗时：~5-10s                                          │
-│  - LLM 调用：0                                           │
-│  - 条件：双 Profile 已就绪，replay.json 存在              │
-└────────────────────┬────────────────────────────────────┘
-                     │ 连续 K 次在前 M 步失败
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tier 2：两阶段 Replay（Phase 1 LLM + Phase 2 Replay）   │
-│  - 耗时：~120s（Phase 1 LLM ~100s + Phase 2 replay ~25s）│
-│  - LLM 调用：Phase 1 full run                            │
-│  - 条件：Tier 1 频繁失败（checkout 起始状态不稳定）        │
-└────────────────────┬────────────────────────────────────┘
-                     │ Phase 2 replay 也频繁失败
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tier 3：两阶段 Explore（Phase 1 + Phase 2 LLM）          │
-│  - 耗时：~200s（两次 LLM 全量探索）                       │
-│  - LLM 调用：Phase 1 + Phase 2 explore                   │
-│  - 条件：replay.json 失效（站点大改版）                    │
-│  - 触发精炼：explore 完成后自动 refine → 更新 replay.json │
-└─────────────────────────────────────────────────────────┘
-```
+- `precheckout_skip`（跳过 Phase 1，直接 rerun）需要 replay.json 第一步是 goto，
+  录制时没有这一步，特殊处理增加复杂度
+- heal 失败本质上就退化为 fully_llm，不需要单独模式
+- guest 场景只要用正确的 profile（Profile 3），Phase 1 LLM 消耗 token 极少（直接到 checkout）
 
-**降级触发条件（防止噪音触发）**
-
-- Tier 1 → Tier 2：全程 replay 在前 M 步（M ≤ 3）连续失败 K 次（K = 3）
-  - 前 M 步失败通常意味着 checkout 起始状态不稳定（Profile 未就绪或 cart 变动）
-  - 中后段失败属于站点更新，不触发降级，直接走 heal 逻辑
-- Tier 2 → Tier 3：Phase 2 replay 连续失败 K 次，且 heal 也无法修复
-  - heal 失败说明 replay.json 结构性失效，需要重新 explore
-
-**自动恢复（Auto-Recovery）**
-
-- Tier 2 连续成功 N 次（N = 5）→ 尝试升回 Tier 1（重建双 Profile）
-- Tier 3 完成 explore + refine 后 → 自动升回 Tier 2，下次从 Tier 2 开始
-
-**实现路径**
-
-- 失败计数器持久化到 `{name}.tier_state.json`（记录当前 tier、连续失败数、连续成功数）
-- `ReplayManager.run()` 根据 tier_state 决定执行路径
-- Tier 1 需要双 Profile 支持（见下方"双 Profile + 精准清 Cookie"章节）
-
-**每个 test case 可通过 `replay_mode` 字段 override 自动降级行为**：
-
-| replay_mode | 含义 | 适用场景 |
-|---|---|---|
-| `auto`（默认） | tier_state 自动管理，按失败次数升降级 | 大多数情况 |
-| `full_replay` | 强制 Tier 1，跳过 Phase 1 | signed-in 电商，cart 稳定 |
-| `checkout_replay` | 强制 Tier 2，Phase 1 LLM + Phase 2 rerun | guest 电商，Phase 1 必须每次跑 |
-| `fully_llm` | 强制 Tier 3，Phase 1 + Phase 2 全 LLM | 动态站点，replay 无意义 |
-
-配置粒度为 **test case**（不是 site），因为同一 site 的 signed-in / guest 场景行为完全不同（如 Nike_autofill_Signed_In 适合 `full_replay`，Nike_autofill_Guest 只适合 `checkout_replay`）。
+**结论**：所有 test case 统一走"Phase 1 LLM + 有 replay 就 rerun + 失败 heal"，
+用 `profile` 字段控制哪个 Edge profile，足够覆盖所有场景，无需 replay_mode。
 
 ---
 
-### 潜在优化：双 Profile + 精准清 Cookie → 全程 replay
-
-对于电商类 site（Nike 等），若能保证 checkout 起始状态稳定，Phase 1 可以省掉，整个流程全程 replay：
-
-**方案**：
-- **Profile A（已登录）**：保留登录 session + 购物车状态，只清 autofill 相关 cookie，不动 cart/session
-- **Profile B（未登录）**：guest checkout 场景独立 profile
-
-这样每次测试直接从 checkout 页面开始 replay，无需 LLM 跑 pre-checkout，速度更快、更稳定。
-
-**inline_sites 适合性分析（基于 wallet-checkout-global-config-stable.json）**：
-
-| 类别 | Site | 结论 |
-|------|------|------|
-| 电商（稳定） | nike.com、target.com、kohls.com、homedepot.com、lowes.com、wayfair.com、jcpenney.com、fanatics.com、bathandbodyworks.com、etsy.com、staples.com、mcafee.com、bedbathandbeyond.com | ✅ 适合全程 replay |
-| 需验证 | amazon.com/co.uk、shop.app、checkout.stripe.com、paypal.com、dominos/papajohns/pizzahut、ebay | ⚠️ 需实测 |
-| 航班/酒店 | expedia.com、delta.com、britishairways.com、ryanair.com、hilton.com、marriott.com、ihg.com、hotels.com、secure.booking.com | ❌ 不适合，保留 Phase 1 LLM |
-| 特殊 | securecheckout.cdc.nicusa.com、facebook.com | ❌ 测试账号难维护 / 场景不固定 |
-
-适合全程 replay 约占 inline_sites 的 36%。
-
-**Signed-in vs Guest 的 Tier 1 适合性差异**：
-
-对于同一个电商 site，signed-in 场景比 guest 场景**更适合 Tier 1**：
-
-| | Signed-in | Guest |
-|---|---|---|
-| Cart 持久化 | ✅ 服务端，账号级别，跨 session 保持 | ❌ 存于 cookie，清 cookie 即失效 |
-| Phase 1 可省略 | ✅ 直接从 checkout URL 开始 replay | ❌ 每次必须重新加商品（Phase 1 不可省） |
-| Tier 1 可行性 | **高** | 低，本质仍是 Tier 2 |
-| 主要风险 | 站点强制重新登录 / 商品售罄 | 无额外风险，但无速度优势 |
-
-结论：**双 Profile 的价值主要在 signed-in 场景**。Guest 场景不值得为 Tier 1 单独维护 Profile，留在 Tier 2 即可。适合 Tier 1 的条件 = 登录账号 + 商品不频繁售罄 + checkout URL 可直接访问。
-
-**局限性**：
-- **航班/酒店类**：价格、座位、库存实时变，即使 session 稳定，replay 在业务层面失效。这类场景 pre-checkout 必须每次 LLM 重新探索，只有 autofill 本身那几步（form 出现到 autofill 完成）适合 replay
-- **动态 token**：CSRF token、一次性 checkout token 每次页面加载重新生成，这类步骤无法 replay
-- **依赖 cart 内容的 DOM**：部分站点根据商品类型展开不同字段，stable_hash 会随商品变化漂移
-
----
-
-## Phase 1：全自动精炼 + 断点续跑（已实现 ✅）
-
-### 执行流程
+## 当前执行架构
 
 ```
 test_runner.py 启动
@@ -188,16 +98,18 @@ Phase 2: 检查 {name}.replay.json 是否存在？
                 成功 → 完成（~25s）
                 失败（step K）→ 浏览器保持打开
                     ↓
-                LLM 从当前页面状态续跑剩余 checkout 任务
+                LLM 从当前页面状态续跑剩余 checkout 任务（heal）
                     ↓
                 新 tail history → HistoryRefiner 精炼 tail
                     ↓
                 合并：replay[:K] + refined_tail → 写回 replay.json
 ```
 
-### 核心组件
+---
 
-#### HistoryRefiner（`test_agent/replay/history_refiner.py`）
+## 核心组件
+
+### HistoryRefiner（`test_agent/replay/history_refiner.py`）
 
 **职责**：把含弯路的 `AgentHistoryList`（checkout 阶段）精炼为最短有效路径。
 
@@ -226,9 +138,9 @@ Phase 2: 检查 {name}.replay.json 是否存在？
 
 ---
 
-#### ReplayManager（`test_agent/replay/replay_manager.py`）
+### ReplayManager（`test_agent/replay/replay_manager.py`）
 
-**职责**：Phase 2 checkout 的 replay/explore/heal 生命周期管理。Phase 1 由调用方负责，`BrowserSession` 以参数形式传入。
+**职责**：Phase 1 LLM + Phase 2 checkout replay/explore/heal 全生命周期管理。
 
 **关键设计：rerun() 失败时不关闭浏览器**
 
@@ -263,21 +175,20 @@ heal 产生的 tail 与 head 拼接时，自动检测 head 末尾和 tail 开头
 
 ---
 
-### 文件结构
+## 文件结构
 
 ```
 test_agent/
 ├── replay/
 │   ├── history_refiner.py    # HistoryRefiner
-│   └── replay_manager.py     # ReplayManager（Phase 2 only）
+│   └── replay_manager.py     # ReplayManager（Phase 1 + Phase 2）
 ├── test_case/
-│   ├── nike.test.json                            # 测试用例定义
-│   ├── pre_checkout_preamble.txt                 # Phase 1 task 模板
-│   ├── checkout_preamble.txt                     # Phase 2 task 模板
-│   ├── nike_autofill_guest.replay.json           # 精炼后黄金路径（5步）
-│   └── nike_autofill_signed_in.replay.json       # 精炼后黄金路径（checkout 阶段）
+│   └── nike/
+│       ├── nike.test.json                        # 测试用例定义（profile 字段区分 signed-in/guest）
+│       ├── nike_autofill_guest.replay.json        # 精炼后黄金路径（checkout 阶段）
+│       └── nike_autofill_signed_in.replay.json    # 精炼后黄金路径（checkout 阶段）
 ├── config.py                                     # 所有配置集中管理（含 replay 参数）
-└── test_runner.py                                # 两阶段执行，输出耗时日志
+└── test_runner.py                                # 入口，输出耗时日志
 ```
 
 ---
@@ -295,4 +206,4 @@ test_agent/
 
 ---
 
-**维护日期**：2026-04-01
+**维护日期**：2026-04-02

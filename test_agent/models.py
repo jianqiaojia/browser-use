@@ -1,19 +1,6 @@
 """Data models for Test Agent."""
-from enum import Enum
 from typing import Optional
 from pydantic import BaseModel
-
-
-class ReplayMode(str, Enum):
-	"""Execution mode for a test case.
-
-	precheckout_llm__checkout_replay   - Phase 1 LLM 导航 + Phase 2 rerun（默认）
-	precheckout_skip__checkout_replay  - 跳过 Phase 1，直接从 checkout 页面 rerun（cookie 保持登录态）
-	fully_llm                          - Phase 1 + Phase 2 全 LLM，不 refine，作为兜底
-	"""
-	PRECHECKOUT_LLM__CHECKOUT_REPLAY = 'precheckout_llm__checkout_replay'
-	PRECHECKOUT_SKIP__CHECKOUT_REPLAY = 'precheckout_skip__checkout_replay'
-	FULLY_LLM = 'fully_llm'
 
 
 class TestCase(BaseModel):
@@ -24,7 +11,6 @@ class TestCase(BaseModel):
 	checkout_instructions:      Phase 2 硬性约束（autofill 验证目标等）。进入 checkout task prompt。
 	checkout_guidance:          Phase 2 UI 操作参考建议。进入 checkout task prompt。
 	profile:                    覆盖默认 Edge profile 目录（e.g. "Profile 3"）。None 表示使用 config 默认值。
-	replay_mode:                执行模式，默认 precheckout_llm__checkout_replay。
 	"""
 	name: str
 	pre_checkout_instructions: Optional[str | list[str]] = None
@@ -32,7 +18,6 @@ class TestCase(BaseModel):
 	checkout_instructions: Optional[str | list[str]] = None
 	checkout_guidance: Optional[str | list[str]] = None
 	profile: Optional[str] = None
-	replay_mode: ReplayMode = ReplayMode.PRECHECKOUT_LLM__CHECKOUT_REPLAY
 
 
 class SiteTest(BaseModel):

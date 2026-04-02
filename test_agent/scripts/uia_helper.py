@@ -38,12 +38,11 @@ class UIAHelper:
         )
         self.root = self.uia.GetRootElement()
     
-    def _check_element_for_popup_features(self, element: Any, all_text_content: list, verbose: bool = True) -> bool:
+    def _check_element_for_popup_features(self, element: Any, all_text_content: list) -> bool:
         """
         检查一个元素是否有足够的Express Checkout特征字符串（>=3个匹配）。
         all_text_content 已经预先填充了按钮名称。
         """
-        vprint = print if verbose else lambda *_: None
         feature_strings = {
             'Contact info',      # IDS_EDGE_EC_INLINE_CONTACT_INFO
             'Payment methods',   # IDS_EDGE_WALLET_PAYMENT_METHODS
@@ -56,12 +55,32 @@ class UIAHelper:
         for feature in feature_strings:
             if any(feature in text for text in all_text_content):
                 matched_features.append(feature)
-                vprint(f"  ✓ Found feature: '{feature}'")
+                print(f"[UIA]   ✓ Found feature: '{feature}'")
         if len(matched_features) >= 3:
-            vprint(f"  ✅ Found Express Checkout Popup! (matched {len(matched_features)} features)")
+            print(f"[UIA]   ✅ Express Checkout Popup matched ({len(matched_features)} features)")
             return True
-        vprint(f"  ✗ Not enough features matched ({len(matched_features)}/3 required)")
+        # print(f"  ✗ Not enough features matched ({len(matched_features)}/3 required)")
         return False
+
+    def _collect_text(self, element: Any) -> list[str]:
+        """收集 element 下所有 Text 控件的 CurrentName。"""
+        result = []
+        try:
+            cond = self.uia.CreatePropertyCondition(
+                UIAutomationClient.UIA_ControlTypePropertyId,
+                UIAutomationClient.UIA_TextControlTypeId,
+            )
+            texts = element.FindAll(UIAutomationClient.TreeScope_Descendants, cond)
+            for i in range(texts.Length):
+                try:
+                    name = texts.GetElement(i).CurrentName
+                    if name and name.strip():
+                        result.append(name)
+                except:
+                    continue
+        except:
+            pass
+        return result
 
     def _collect_buttons_text(self, element: Any, verbose: bool = True) -> tuple[list, Any]:
         """
@@ -79,88 +98,72 @@ class UIAHelper:
                 name = buttons.GetElement(i).CurrentName
                 if name and name.strip():
                     names.append(name)
-                    vprint(f"    Button {i}: '{name}'")
+                    # vprint(f"    Button {i}: '{name}'")
             except:
                 continue
         return names, buttons
 
     def _has_express_checkout_popup_features(self, window: Any, verbose: bool = True) -> bool | tuple[bool, Any]:
         """
-        检查窗口是否是Express Checkout Popup。
-        - 如果 window 本身有 >=4 个按钮且特征匹配 → 返回 True
-        - 如果 window 只有 2 个按钮（body sub-pane），向上走到父元素再检查：
-          因为实际 widget 宽度因 shadow/border insets 比 308px 略宽，
-          content sub-pane 是 308px，但父 widget pane 宽度 > 320px，不会进入外层循环。
-          所以：找到 308px 的 body pane → 爬到父元素 → 父元素包含全部 4 个按钮。
-          此时返回 (True, parent_element) 以便调用方使用正确的元素句柄。
+        检查 UIA Pane 是否是 Edge Express Checkout Popup。
+
+        UIA 树结构（edge_express_checkout_view.cc）：
+            EdgeExpressCheckoutView (root pane)
+            ├── InlineSplitButton  → "Autofill" button
+            └── EdgeExpressCheckoutBodyView (body pane)
+                ├── "Contact info" Text
+                ├── "Payment methods" Text
+                └── profile option Buttons
+
+        FindAll(TreeScope_Descendants) 先枚举 body pane 再枚举 root pane，
+        因此分两种命中情况：
+          - body pane：有 body features 但无 Autofill → walk to parent 确认
+          - root pane：body features + Autofill 都在当前节点
+
+        Returns: False | True | (True, parent_element)
         """
         vprint = print if verbose else lambda *_: None
-        try:
-            rect = window.CurrentBoundingRectangle
-            width = rect.right - rect.left
 
-            if not (300 <= width <= 320):
-                vprint(f"  ✗ Width mismatch: {width}px (expected ~308px)")
+        # 子 pane 特征：text 中有 Contact info 和 Payment methods
+        _BODY_FEATURES = {'Contact info', 'Payment methods'}
+        # 父 pane 额外特征：button name 中有 Autofill
+        _ROOT_FEATURE = 'Autofill'
+
+        def _log_matched() -> None:
+            for f in sorted(_BODY_FEATURES | {_ROOT_FEATURE}):
+                vprint(f"[UIA]   ✓ Feature: '{f}'")
+            vprint(f"[UIA]   ✅ Express Checkout Popup matched")
+
+        try:
+            btn_names, buttons = self._collect_buttons_text(window, verbose=False)
+            text_content = self._collect_text(window)
+            all_content = text_content + btn_names
+
+            body_matched = _BODY_FEATURES.issubset({f for f in _BODY_FEATURES if any(f in t for t in all_content)})
+            if not body_matched:
                 return False
 
-            vprint(f"  ✓ Width check passed: {width}px")
-
-            all_text_content = []
-            try:
-                text_condition = self.uia.CreatePropertyCondition(
-                    UIAutomationClient.UIA_ControlTypePropertyId,
-                    UIAutomationClient.UIA_TextControlTypeId
-                )
-                texts = window.FindAll(UIAutomationClient.TreeScope_Descendants, text_condition)
-                for i in range(texts.Length):
-                    try:
-                        name = texts.GetElement(i).CurrentName
-                        if name and name.strip():
-                            all_text_content.append(name)
-                    except:
-                        continue
-            except Exception as e:
-                print(f"  ✗ Error getting texts: {e}")
-
-            try:
-                vprint(f"  Collecting buttons in current pane...")
-                btn_names, buttons = self._collect_buttons_text(window, verbose=verbose)
-                all_text_content.extend(btn_names)
-                vprint(f"  Found {buttons.Length} buttons in pane")
-
-                if buttons.Length >= 4:
-                    vprint(f"  Found {len(all_text_content)} text/button elements")
-                    return self._check_element_for_popup_features(window, all_text_content, verbose=verbose)
-
-                vprint(f"  Only {buttons.Length} buttons in pane, walking up to parent to find full popup...")
+            # 子 pane：有 body features，再查父节点是否有 Autofill
+            if not any(_ROOT_FEATURE in t for t in all_content):
+                vprint(f"[UIA]   Body pane matched, walking up to parent for Autofill button...")
                 try:
                     tree_walker = self.uia.CreateTreeWalker(self.uia.CreateTrueCondition())
                     parent = tree_walker.GetParentElement(window)
                     if parent:
-                        parent_rect = parent.CurrentBoundingRectangle
-                        parent_width = parent_rect.right - parent_rect.left
-                        parent_height = parent_rect.bottom - parent_rect.top
-                        vprint(f"  Parent element: {parent_width}x{parent_height}")
-
-                        parent_btn_names, parent_buttons = self._collect_buttons_text(parent, verbose=verbose)
-                        vprint(f"  Found {parent_buttons.Length} buttons in parent")
-                        parent_text_content = list(all_text_content) + parent_btn_names
-
-                        if parent_buttons.Length >= 4:
-                            if self._check_element_for_popup_features(parent, parent_text_content, verbose=verbose):
-                                return (True, parent)
-                        else:
-                            vprint(f"  Parent also has < 4 buttons ({parent_buttons.Length}), giving up")
+                        parent_btn_names, _ = self._collect_buttons_text(parent, verbose=False)
+                        if any(_ROOT_FEATURE in t for t in parent_btn_names):
+                            _log_matched()
+                            return (True, parent)
                 except Exception as e:
-                    print(f"  Error walking to parent: {e}")
+                    vprint(f"[UIA]   ❌ Error walking to parent: {e}")
+                return False
 
-            except Exception as e:
-                print(f"  ✗ Error getting buttons: {e}")
-
-            return False
+            # 根 pane：body features + Autofill 都在当前 pane
+            _log_matched()
+            return True
 
         except Exception as e:
-            print(f"  ✗ Error checking features: {e}")
+            vprint(f"[UIA]   ❌ Error checking features: {e}")
             return False
     
     def find_autofill_popup(self, verbose: bool = True) -> Optional[Dict[str, Any]]:
@@ -175,9 +178,7 @@ class UIAHelper:
         """
         try:
             vprint = print if verbose else lambda *_: None
-            vprint(f"\n{'='*60}")
-            vprint(f"Searching for Express Checkout Popup Dialog...")
-            vprint(f"{'='*60}")
+            vprint(f"[UIA] Searching for Express Checkout Popup...")
 
             # 查找所有Chrome浏览器窗口
             class_condition = self.uia.CreatePropertyCondition(
@@ -199,7 +200,7 @@ class UIAHelper:
                     if 'edge' not in name.lower() and 'microsoft' not in name.lower():
                         continue
                     
-                    vprint(f"\nSearching in browser: {name}")
+                    # vprint(f"[UIA]   Searching in: {name}")
                     
                     # 在窗口内搜索所有Dialog元素
                     dialog_condition = self.uia.CreatePropertyCondition(
@@ -218,47 +219,46 @@ class UIAHelper:
                         
                         try:
                             rect = dialog.CurrentBoundingRectangle
-                            width = rect.right - rect.left
-                            height = rect.bottom - rect.top
+                            # width = rect.right - rect.left
+                            # height = rect.bottom - rect.top
                             
                             # 检查宽度是否匹配
-                            if 300 <= width <= 320:
-                                vprint(f"    Pane #{j+1}: {width}x{height}")
+                            # vprint(f"shit!!!!!    Pane #{j+1}: {width}x{height}")
+                            # if 300 <= width <= 320:
+                            # vprint(f"    Pane #{j+1}: {width}x{height} ✓ in range")
 
-                                # 检查是否有Express Checkout特征
-                                result = self._has_express_checkout_popup_features(dialog, verbose=verbose)
-                                # result 可能是 False / True / (True, parent_element)
-                                if result:
-                                    # 如果返回 (True, parent)，使用父元素作为句柄来源
-                                    if isinstance(result, tuple):
-                                        _, popup_element = result
-                                        popup_rect = popup_element.CurrentBoundingRectangle
-                                    else:
-                                        popup_element = dialog
-                                        popup_rect = rect
+                            # 检查是否有Express Checkout特征
+                            result = self._has_express_checkout_popup_features(dialog, verbose=verbose)
+                            # result 可能是 False / True / (True, parent_element)
+                            if result:
+                                # 如果返回 (True, parent)，使用父元素作为句柄来源
+                                if isinstance(result, tuple):
+                                    _, popup_element = result
+                                    popup_rect = popup_element.CurrentBoundingRectangle
+                                else:
+                                    popup_element = dialog
+                                    popup_rect = rect
 
-                                    vprint(f"\n{'='*60}")
-                                    vprint(f"✅✅✅ Found Express Checkout Popup!")
-                                    vprint(f"{'='*60}")
+                                print(f"[UIA]   ✅✅✅ Found Express Checkout Popup!")
 
-                                    # 尝试获取窗口句柄
-                                    try:
-                                        hwnd = popup_element.CurrentNativeWindowHandle
-                                    except:
-                                        hwnd = 0
+                                # 尝试获取窗口句柄
+                                try:
+                                    hwnd = popup_element.CurrentNativeWindowHandle
+                                except:
+                                    hwnd = 0
 
-                                    return {
-                                        'success': True,
-                                        'element': popup_element,
-                                        'hwnd': hwnd if hwnd else window.CurrentNativeWindowHandle,
-                                        'bounds': {
-                                            'x': popup_rect.left,
-                                            'y': popup_rect.top,
-                                            'width': popup_rect.right - popup_rect.left,
-                                            'height': popup_rect.bottom - popup_rect.top
-                                        },
-                                        'name': popup_element.CurrentName
-                                    }
+                                return {
+                                    'success': True,
+                                    'element': popup_element,
+                                    'hwnd': hwnd if hwnd else window.CurrentNativeWindowHandle,
+                                    'bounds': {
+                                        'x': popup_rect.left,
+                                        'y': popup_rect.top,
+                                        'width': popup_rect.right - popup_rect.left,
+                                        'height': popup_rect.bottom - popup_rect.top
+                                    },
+                                    'name': popup_element.CurrentName
+                                }
                         except Exception as e:
                             continue
                             
@@ -266,8 +266,7 @@ class UIAHelper:
                     print(f"  Error searching in window: {e}")
                     continue
             
-            vprint(f"\n{'='*60}")
-            vprint("❌ Express Checkout Popup not found")
+            print("[UIA]   ❌❌ Express Checkout Popup not found")
             return {'success': False, 'error': 'Popup not found in any browser window'}
             
         except Exception as e:
@@ -322,7 +321,7 @@ class UIAHelper:
                 condition
             )
 
-            vprint(f"[find_option_buttons] Found {buttons.Length} total buttons")
+            # vprint(f"[find_option_buttons] Found {buttons.Length} total buttons")
 
             # 过滤出真正的选项按钮（排除 "Autofill", "More actions" 等操作按钮）
             options = []
@@ -372,18 +371,24 @@ class UIAHelper:
             return []
     
     def invoke_element(self, element: Any) -> bool:
-        """调用元素（点击）"""
+        """调用元素（点击）。优先 InvokePattern，fallback 到 LegacyIAccessiblePattern.DoDefaultAction。"""
         try:
-            # 获取 Invoke Pattern
-            invoke_pattern = element.GetCurrentPattern(
-                UIAutomationClient.UIA_InvokePatternId
-            )
-            invoke = invoke_pattern.QueryInterface(UIAutomationClient.IUIAutomationInvokePattern)
-            invoke.Invoke()
-            return True
+            invoke_pattern = element.GetCurrentPattern(UIAutomationClient.UIA_InvokePatternId)
+            if invoke_pattern:
+                invoke = invoke_pattern.QueryInterface(UIAutomationClient.IUIAutomationInvokePattern)
+                invoke.Invoke()
+                return True
+        except Exception:
+            pass
+        try:
+            legacy = element.GetCurrentPattern(UIAutomationClient.UIA_LegacyIAccessiblePatternId)
+            if legacy:
+                acc = legacy.QueryInterface(UIAutomationClient.IUIAutomationLegacyIAccessiblePattern)
+                acc.DoDefaultAction()
+                return True
         except Exception as e:
-            print(f"Error invoking element: {e}")
-            return False
+            print(f"[UIA] Error invoking element: {e}")
+        return False
     
     def get_popup_profile_names(self, verbose: bool = True) -> Dict[str, Any]:
         """
@@ -434,7 +439,7 @@ class UIAHelper:
 
             # 1. 查找选项按钮（使用新的 find_option_buttons）
             option_buttons = self.find_option_buttons(popup, verbose=False)
-            print(f"Found {len(option_buttons)} option buttons")
+            # print(f"Found {len(option_buttons)} option buttons")
 
             if len(option_buttons) > profile_index:
                 print(f"Selecting option button at index {profile_index}")
@@ -443,7 +448,7 @@ class UIAHelper:
 
             # 2. 查找并点击 Autofill 按钮
             all_buttons = self.find_buttons(popup)
-            print(f"Found {len(all_buttons)} total buttons")
+            # print(f"Found {len(all_buttons)} total buttons")
 
             autofill_button = None
             for button in all_buttons:
@@ -451,17 +456,17 @@ class UIAHelper:
                     name = button.CurrentName
                     if name and name.strip() == 'Autofill':  # 精确匹配 "Autofill"
                         autofill_button = button
-                        print(f"Found Autofill button")
+                        print(f"[UIA] Found Autofill button")
                         break
                 except:
                     continue
 
             if autofill_button:
-                print("Clicking Autofill button")
+                print("[UIA] Clicking Autofill button")
                 self.invoke_element(autofill_button)
                 return {'success': True}
             else:
-                print("Warning: Autofill button not found, but selection may have succeeded")
+                print("[UIA] Warning: Autofill button not found, but selection may have succeeded")
                 return {'success': True, 'warning': 'Autofill button not found'}
 
         except Exception as e:

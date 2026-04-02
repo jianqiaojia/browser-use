@@ -17,7 +17,7 @@ from test_agent.scripts.uia_helper import UIAHelper
 
 class UIAWaitForPopupModel(BaseModel):
 	timeout: float = 10.0
-	check_interval: float = 0.3
+	check_interval: float = 1.0
 
 
 class UIASelectAutofillModel(BaseModel):
@@ -30,27 +30,25 @@ async def execute_uia_wait_for_popup(
 	uia_helper: UIAHelper,
 ) -> ActionResult:
 	"""Poll until the autofill popup is visible or timeout expires."""
-	print(f'🔍 Waiting for autofill popup (timeout: {params.timeout}s, interval: {params.check_interval}s)...')
+	print(f'[UIA] Waiting for autofill popup (timeout: {params.timeout}s, interval: {params.check_interval}s)...')
 	start_time = time.time()
 	check_count = 0
 
 	while (time.time() - start_time) < params.timeout:
 		check_count += 1
-		# verbose only on first check — subsequent polls are silent to avoid log spam
-		verbose = check_count == 1
 		try:
-			result = uia_helper.find_autofill_popup(verbose=verbose)
+			result = uia_helper.find_autofill_popup()
 			if result and result.get('success'):
 				elapsed = time.time() - start_time
-				msg = f'✅ Autofill popup detected after {elapsed:.1f}s ({check_count} checks)'
+				msg = f'[UIA] ✅ Autofill popup detected after {elapsed:.1f}s ({check_count} checks)'
 				print(msg)
 				return ActionResult(extracted_content=msg, include_in_memory=True)
 		except Exception as e:
-			print(f'Check #{check_count} failed: {str(e)}')
+			print(f'[UIA] Check #{check_count} error: {str(e)}')
 		await asyncio.sleep(params.check_interval)
 
 	elapsed = time.time() - start_time
-	msg = f'❌ Timeout: Autofill popup not detected after {elapsed:.1f}s ({check_count} checks)'
+	msg = f'[UIA] ❌ Timeout: Autofill popup not detected after {elapsed:.1f}s ({check_count} checks)'
 	print(msg)
 	return ActionResult(error=msg, include_in_memory=True, success=False)
 
@@ -60,25 +58,25 @@ async def execute_uia_select_autofill(
 	uia_helper: UIAHelper,
 ) -> ActionResult:
 	"""Click the autofill button via UIA Helper."""
-	print(f'⚡ Clicking autofill button via UIA (profile_index: {params.profile_index}, payment_index: {params.payment_index})...')
+	print(f'[UIA] Clicking autofill button (profile_index: {params.profile_index}, payment_index: {params.payment_index})...')
 	try:
 		result = uia_helper.select_and_confirm(
 			profile_index=params.profile_index,
 			payment_index=params.payment_index,
 		)
 		if result.get('success'):
-			msg = f'✅ Successfully selected autofill option at index {params.profile_index}'
+			msg = f'[UIA] ✅ Autofill selected at index {params.profile_index}'
 			if result.get('warning'):
-				msg += f' (Warning: {result.get("warning")})'
+				msg += f' (warning: {result.get("warning")})'
 			print(msg)
 			return ActionResult(extracted_content=msg, include_in_memory=True)
 		else:
 			error = result.get('error', 'Unknown error')
-			msg = f'❌ Failed to select autofill option: {error}'
+			msg = f'[UIA] ❌ Failed to select autofill: {error}'
 			print(msg)
 			return ActionResult(error=msg, include_in_memory=True, success=False)
 	except Exception as e:
-		msg = f'❌ Failed to execute UIA select operation: {str(e)}'
+		msg = f'[UIA] ❌ Unexpected error: {str(e)}'
 		print(msg)
 		return ActionResult(error=msg, include_in_memory=True, success=False)
 

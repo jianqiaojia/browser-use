@@ -1,6 +1,9 @@
 """
 OS Click Action - Calculate screen coordinates and perform OS-level mouse clicks
 
+NOTE: 目前未使用。replay 时坐标基于录制时的屏幕分辨率，换屏幕或分辨率变更后点击位置会偏移，
+导致 autofill popup 触发失败。改用 cdp_click（基于 DOM 元素 nodeId）替代。
+
 This action calculates the screen coordinates of a DOM element and performs
 real OS-level mouse clicks using Windows API, which are indistinguishable from
 manual user clicks. This bypasses all browser-level detection mechanisms.
