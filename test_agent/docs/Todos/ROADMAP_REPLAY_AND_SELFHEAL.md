@@ -112,6 +112,17 @@ pre-checkout 阶段（登录、管理购物车、导航至 checkout）在不同�
 - `ReplayManager.run()` 根据 tier_state 决定执行路径
 - Tier 1 需要双 Profile 支持（见下方"双 Profile + 精准清 Cookie"章节）
 
+**每个 test case 可通过 `replay_mode` 字段 override 自动降级行为**：
+
+| replay_mode | 含义 | 适用场景 |
+|---|---|---|
+| `auto`（默认） | tier_state 自动管理，按失败次数升降级 | 大多数情况 |
+| `full_replay` | 强制 Tier 1，跳过 Phase 1 | signed-in 电商，cart 稳定 |
+| `checkout_replay` | 强制 Tier 2，Phase 1 LLM + Phase 2 rerun | guest 电商，Phase 1 必须每次跑 |
+| `fully_llm` | 强制 Tier 3，Phase 1 + Phase 2 全 LLM | 动态站点，replay 无意义 |
+
+配置粒度为 **test case**（不是 site），因为同一 site 的 signed-in / guest 场景行为完全不同（如 Nike_autofill_Signed_In 适合 `full_replay`，Nike_autofill_Guest 只适合 `checkout_replay`）。
+
 ---
 
 ### 潜在优化：双 Profile + 精准清 Cookie → 全程 replay
@@ -134,6 +145,19 @@ pre-checkout 阶段（登录、管理购物车、导航至 checkout）在不同�
 | 特殊 | securecheckout.cdc.nicusa.com、facebook.com | ❌ 测试账号难维护 / 场景不固定 |
 
 适合全程 replay 约占 inline_sites 的 36%。
+
+**Signed-in vs Guest 的 Tier 1 适合性差异**：
+
+对于同一个电商 site，signed-in 场景比 guest 场景**更适合 Tier 1**：
+
+| | Signed-in | Guest |
+|---|---|---|
+| Cart 持久化 | ✅ 服务端，账号级别，跨 session 保持 | ❌ 存于 cookie，清 cookie 即失效 |
+| Phase 1 可省略 | ✅ 直接从 checkout URL 开始 replay | ❌ 每次必须重新加商品（Phase 1 不可省） |
+| Tier 1 可行性 | **高** | 低，本质仍是 Tier 2 |
+| 主要风险 | 站点强制重新登录 / 商品售罄 | 无额外风险，但无速度优势 |
+
+结论：**双 Profile 的价值主要在 signed-in 场景**。Guest 场景不值得为 Tier 1 单独维护 Profile，留在 Tier 2 即可。适合 Tier 1 的条件 = 登录账号 + 商品不频繁售罄 + checkout URL 可直接访问。
 
 **局限性**：
 - **航班/酒店类**：价格、座位、库存实时变，即使 session 稳定，replay 在业务层面失效。这类场景 pre-checkout 必须每次 LLM 重新探索，只有 autofill 本身那几步（form 出现到 autofill 完成）适合 replay

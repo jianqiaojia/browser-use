@@ -182,7 +182,11 @@ import test_agent.llm.litellm_patch # 副作用：usage token fallback
 }
 ```
 
-### 5. get_email_verification_code
+### 5. 配置 Edge 启动页（可选）
+
+`precheckout_skip` 模式依赖 replay.json 第一步自动 goto checkout URL，不需要 Edge 恢复上次页面。Edge 的"从上次停止的地方继续"设置对此模式无影响，无需特别配置。
+
+---
 
 自动从 `happyautoec@outlook.com` 收件箱读取 Nike 验证码邮件，提取数字验证码（4-8位）。
 基于 **Outlook 桌面版 COM/MAPI**，无需 OAuth，无需 token，Outlook 运行即可用。

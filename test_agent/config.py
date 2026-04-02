@@ -32,6 +32,12 @@ EDGE_STABLE_USER_DATA_DIR: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\
 EDGE_LOG_FILE_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\xpay-edge-starter\\default-profile\\chrome_debug.log'
 EDGE_STABLE_LOG_FILE_PATH: Final[str] = 'C:\\Users\\jianqiaojia\\AppData\\Local\\Microsoft\\Edge\\User Data\\chrome_debug.log'
 DEFAULT_PROFILE: Final[str] = 'Profile 2'
+
+# Named profile aliases — use these in test.json "profile" field instead of raw "Profile N" strings
+PROFILE_ALIASES: Final[dict[str, str]] = {
+    'signed_in': 'Profile 2',        # edge:mstest_xpay@outlook.com, site: signed-in, cart persists server-side
+    'guest_with_cookie': 'Profile 3', # edge:happyautoec@outlook.com, site: guest (not signed in), cart persists via cookie
+}
 ENABLE_FEATURES: Final[str] = ''
 DISABLE_FEATURES: Final[str] = ''
 
@@ -109,7 +115,7 @@ class TestAgentConfig:
             'executable_path': self.edge_path,  # 新版使用 executable_path
             'user_data_dir': self.user_data_dir,  # BrowserProfile 直接接受此参数
             'profile_directory': self.profile,  # 新版使用 profile_directory
-            'args': [  # 新版使用 args 而不是 extra_chromium_args
+            'args': [
                 '--enable-logging',
                 '--vmodule=native_wallet_checkout_manager=1,shipping_address_form=2',
                 '--disable-blink-features=AutomationControlled',

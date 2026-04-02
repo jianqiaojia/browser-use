@@ -29,9 +29,9 @@ logging.getLogger('comtypes').setLevel(logging.WARNING)
 import test_agent.llm.strip_patch  # noqa: F401
 import test_agent.llm.litellm_patch  # noqa: F401
 
-from browser_use import Agent, BrowserProfile, BrowserSession, Tools
+from browser_use import BrowserProfile, BrowserSession, Tools
 from test_agent.llm.llm_config import get_claude_sonnet as get_claude
-from test_agent.config import config
+from test_agent.config import config, PROFILE_ALIASES
 from test_agent.models import TestCase, SiteTest
 from test_agent.register_custom_actions import register_custom_actions
 from test_agent.scripts.browser_focus_manager import BrowserFocusManager
@@ -62,6 +62,10 @@ async def run_test_case(
 		# Get browser config
 		browser_config = config.get_browser_profile_config()
 
+		# Per-test profile override (supports aliases from PROFILE_ALIASES)
+		if test.profile:
+			browser_config['profile_directory'] = PROFILE_ALIASES.get(test.profile, test.profile)
+
 		# Get proxy if enabled
 		proxy_settings = await config.get_proxy_for_browser()
 		if proxy_settings:
@@ -79,6 +83,16 @@ async def run_test_case(
 		safe_name = test.name.replace(" ", "_").replace("-", "_").lower()
 		replay_path = replay_dir / f"{safe_name}.replay.json"
 
+		runner = ReplayManager(
+			pre_checkout_task=pre_checkout_task,
+			checkout_task=checkout_task,
+			replay_path=replay_path,
+			llm=llm,
+			browser_profile=browser_profile,
+			tools=tools,
+			replay_mode=test.replay_mode,
+		)
+
 		# Start focus manager if provided (in background thread, non-blocking)
 		if focus_manager:
 			print("[FocusManager] Starting browser focus management in background...")
@@ -91,44 +105,16 @@ async def run_test_case(
 		browser_session = BrowserSession(browser_profile=keep_alive_profile)
 		await browser_session.start()
 
+		t0 = time.perf_counter()
 		success = False
 		try:
-			# Phase 1: pre-checkout (LLM, fresh each run, not recorded)
-			t0 = time.perf_counter()
-			print(f"\n[Phase 1] pre-checkout...")
-			pre_checkout_agent = Agent(
-				task=pre_checkout_task,
-				llm=llm,
-				browser_profile=browser_profile,
-				browser_session=browser_session,
-				tools=tools,
-				max_actions_per_step=config.max_actions_per_step,
-			)
-			pre_history = await pre_checkout_agent.run(max_steps=config.max_steps)
-			if not pre_history or not pre_history.is_successful():
-				print(f"\n[Phase 1] ❌ pre-checkout failed")
-				return False
-			print(f"[Phase 1] ✅ done ({len(pre_history.history)} steps, {time.perf_counter()-t0:.1f}s)")
-
-			# Phase 2: checkout via ReplayManager (replay or explore)
-			manager = ReplayManager(
-				replay_path=replay_path,
-				checkout_task=checkout_task,
-				llm=llm,
-				browser_profile=browser_profile,
-				tools=tools,
-			)
-
-			t0 = time.perf_counter()
-			print(f"\n[Phase 2] {replay_path.name}")
-			success = await manager.run(browser_session)
-			elapsed = time.perf_counter() - t0
-			print(f"\n⏱️  {elapsed:.1f}s — {'✅ PASS' if success else '❌ FAIL'}")
+			success = await runner.run(browser_session)
 		finally:
 			try:
 				await browser_session.stop()
 			except Exception:
 				pass
+		print(f"[TestRunner] ⏱️  {time.perf_counter()-t0:.1f}s — {'✅ PASS' if success else '❌ FAIL'}")
 
 		if focus_manager:
 			focus_manager.stop()

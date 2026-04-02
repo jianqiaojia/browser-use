@@ -17,7 +17,8 @@ Instructions below are hard constraints — follow them strictly.
 # Tools
 The following custom tools are available — prefer them over manual browser interaction whenever applicable:
 - clear_site_data: clear cookies and storage for a domain (use to sign out without UI)
-- email_mark_baseline / get_email_verification_code: retrieve email verification codes from Outlook\
+- email_mark_baseline: mark current inbox state as baseline before triggering a login/verification email
+- get_email_verification_code: retrieve the latest email verification code from Outlook (call after email_mark_baseline)\
 """
 
 checkout = """\
