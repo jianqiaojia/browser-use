@@ -1,7 +1,7 @@
 """
 UIA Autofill Actions — trigger Edge Express Checkout popup and select an autofill entry.
 
-Single combined action: cdp_click → wait for popup → select autofill, with auto-retry.
+Single combined action: cdp_click → select autofill, with auto-retry.
 Uses CSS selector (not DOM index) for stable replay across page loads.
 """
 
@@ -23,36 +23,6 @@ class TriggerAndAutofillModel(BaseModel):
 	payment_index: int = Field(default=0, description='Index of the payment method to select (0 = first)')
 
 
-async def _trigger_popup(
-	selector: str,
-	browser_session: BrowserSession,
-) -> bool:
-	"""CDP click by CSS selector to trigger popup. Returns False if click failed."""
-	from test_agent.actions.cdp_click import execute_cdp_click_by_selector
-	result = await execute_cdp_click_by_selector(selector, browser_session)
-	if result.error:
-		print(f'[TriggerAndAutofill] cdp_click failed: {result.error}')
-		return False
-	return True
-
-
-async def _select_autofill(
-	uia_helper: UIAHelper,
-	selector: str,
-	browser_session: BrowserSession,
-	profile_index: int,
-	payment_index: int,
-) -> dict:
-	"""Wait for popup then select_and_confirm; re-triggers once if popup not found."""
-	result = uia_helper.select_and_confirm(profile_index=profile_index, payment_index=payment_index)
-	if not result.get('success') and 'Popup not found' in result.get('error', ''):
-		print(f'[TriggerAndAutofill] Popup not found, re-triggering...')
-		await _trigger_popup(selector, browser_session)
-		await asyncio.sleep(1.0)
-		result = uia_helper.select_and_confirm(profile_index=profile_index, payment_index=payment_index)
-	return result
-
-
 async def execute_trigger_and_autofill(
 	params: TriggerAndAutofillModel,
 	uia_helper: UIAHelper,
@@ -60,16 +30,20 @@ async def execute_trigger_and_autofill(
 	max_attempts: int = 3,
 ) -> ActionResult:
 	"""Click input → select autofill, with retry loop."""
+	from test_agent.actions.cdp_click import execute_cdp_click_by_selector
+
 	for attempt in range(1, max_attempts + 1):
 		print(f'\n[TriggerAndAutofill] Attempt {attempt}/{max_attempts}')
 
-		if not await _trigger_popup(params.input_selector, browser_session):
+		click_result = await execute_cdp_click_by_selector(params.input_selector, browser_session)
+		if click_result.error:
+			print(f'[TriggerAndAutofill] cdp_click failed: {click_result.error}')
 			await asyncio.sleep(1.0)
 			continue
 
-		select_result = await _select_autofill(
-			uia_helper, params.input_selector, browser_session,
-			params.profile_index, params.payment_index,
+		select_result = uia_helper.select_and_confirm(
+			profile_index=params.profile_index,
+			payment_index=params.payment_index,
 		)
 		if select_result.get('success'):
 			msg = f'[TriggerAndAutofill] ✅ Autofill selected (attempt {attempt})'

@@ -370,6 +370,9 @@ async def execute_cdp_click(
 		)
 
 
+from test_agent.scripts.postmsg_click import postmsg_lbuttondown as _postmsg_lbuttondown
+
+
 async def execute_cdp_click_by_selector(
 	selector: str,
 	browser_session: BrowserSession,
@@ -417,22 +420,35 @@ async def execute_cdp_click_by_selector(
 		x, y = float(box['x']), float(box['y'])
 		print(f'[CDP Click] Element: {box.get("tag", "?")} type={box.get("type", "?")} center=({x:.1f}, {y:.1f})')
 
-		# Step 3: blur then mouse sequence
-		blur_result = await page.evaluate("""() => {
-			const a = document.activeElement;
-			const tag = a ? a.tagName + (a.id ? '#' + a.id : a.name ? '[name=' + a.name + ']' : '') : 'none';
-			if (a && a !== document.body) { a.blur(); return 'blurred: ' + tag; }
-			return 'no active element';
-		}""")
-		print(f'[CDP Click] Step 3a: {blur_result}')
+		# Step 2b: PostMessage WM_SETFOCUS + WM_LBUTTONDOWN — 确保 renderer 获得焦点
+		print(f'[CDP Click] Step 2b: PostMessage to renderer...')
+		_postmsg_lbuttondown(x, y)
+		await asyncio.sleep(0.1)
+
+		# Step 3: Execute CDP mouse sequence
+		print(f'[CDP Click] Step 3: Executing CDP mouse sequence...')
 
 		session_id = await page.session_id
-		print(f'[CDP Click] Step 3b: Dispatching mouse events...')
-		await page._client.send.Input.dispatchMouseEvent(params={'type': 'mouseMoved', 'x': x, 'y': y}, session_id=session_id)
+
+		# mouseMoved
+		await page._client.send.Input.dispatchMouseEvent(
+			params={'type': 'mouseMoved', 'x': x, 'y': y},
+			session_id=session_id
+		)
 		await asyncio.sleep(0.05)
-		await page._client.send.Input.dispatchMouseEvent(params={'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1}, session_id=session_id)
+
+		# mousePressed
+		await page._client.send.Input.dispatchMouseEvent(
+			params={'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1},
+			session_id=session_id
+		)
 		await asyncio.sleep(0.08)
-		await page._client.send.Input.dispatchMouseEvent(params={'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1}, session_id=session_id)
+
+		# mouseReleased
+		await page._client.send.Input.dispatchMouseEvent(
+			params={'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1},
+			session_id=session_id
+		)
 
 		print(f'[CDP Click] ✅ CDP click sequence completed')
 		return ActionResult(extracted_content=f'✅ CDP click: {selector} at ({x:.1f}, {y:.1f})', include_in_memory=True)
