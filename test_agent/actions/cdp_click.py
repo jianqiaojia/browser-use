@@ -370,6 +370,79 @@ async def execute_cdp_click(
 		)
 
 
+async def execute_cdp_click_by_selector(
+	selector: str,
+	browser_session: BrowserSession,
+) -> ActionResult:
+	"""
+	Execute CDP click using a CSS selector directly — no DOM index needed.
+	Used by trigger_and_autofill for stable replay across page loads.
+	"""
+	page = await browser_session.get_current_page()
+	if page is None:
+		return ActionResult(error='Could not get current page', include_in_memory=True, success=False)
+
+	print(f'\n[CDP Click] Target selector: {selector}')
+
+	try:
+		# Step 1: activateTarget → SetForegroundWindow
+		print(f'[CDP Click] Step 1: Activating target...')
+		try:
+			await page._client.send.Target.activateTarget(params={'targetId': page._target_id})
+			print(f'[CDP Click] Step 1: Target activated')
+		except Exception as e:
+			print(f'[CDP Click] ⚠️  activateTarget failed: {e}')
+
+		print(f'[CDP Click] Step 1b: Setting window foreground...')
+		focus_success = bring_window_to_foreground()
+		if not focus_success:
+			print(f'[CDP Click] ⚠️  SetForegroundWindow failed, autofill may not trigger')
+		await asyncio.sleep(0.3)
+
+		# Step 2: get bounding box
+		print(f'[CDP Click] Step 2: Getting element coordinates...')
+		js_code = f'''() => {{
+			const el = document.querySelector('{selector}');
+			if (!el) return {{error: 'not found'}};
+			const r = el.getBoundingClientRect();
+			return {{x: r.left + r.width / 2, y: r.top + r.height / 2, tag: el.tagName, type: el.type || ''}};
+		}}'''
+		box = await page.evaluate(js_code)
+		if isinstance(box, str):
+			import json
+			box = json.loads(box)
+		if isinstance(box, dict) and 'error' in box:
+			return ActionResult(error=f'Element not found: {selector}', include_in_memory=True, success=False)
+
+		x, y = float(box['x']), float(box['y'])
+		print(f'[CDP Click] Element: {box.get("tag", "?")} type={box.get("type", "?")} center=({x:.1f}, {y:.1f})')
+
+		# Step 3: blur then mouse sequence
+		blur_result = await page.evaluate("""() => {
+			const a = document.activeElement;
+			const tag = a ? a.tagName + (a.id ? '#' + a.id : a.name ? '[name=' + a.name + ']' : '') : 'none';
+			if (a && a !== document.body) { a.blur(); return 'blurred: ' + tag; }
+			return 'no active element';
+		}""")
+		print(f'[CDP Click] Step 3a: {blur_result}')
+
+		session_id = await page.session_id
+		print(f'[CDP Click] Step 3b: Dispatching mouse events...')
+		await page._client.send.Input.dispatchMouseEvent(params={'type': 'mouseMoved', 'x': x, 'y': y}, session_id=session_id)
+		await asyncio.sleep(0.05)
+		await page._client.send.Input.dispatchMouseEvent(params={'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1}, session_id=session_id)
+		await asyncio.sleep(0.08)
+		await page._client.send.Input.dispatchMouseEvent(params={'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1}, session_id=session_id)
+
+		print(f'[CDP Click] ✅ CDP click sequence completed')
+		return ActionResult(extracted_content=f'✅ CDP click: {selector} at ({x:.1f}, {y:.1f})', include_in_memory=True)
+
+	except Exception as e:
+		import traceback
+		traceback.print_exc()
+		return ActionResult(error=f'❌ CDP click failed: {e}', include_in_memory=True, success=False)
+
+
 def register_cdp_click(registry: Registry) -> None:
 	"""
 	Register the cdp_click action to the tools registry.

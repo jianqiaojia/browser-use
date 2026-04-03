@@ -21,8 +21,7 @@ _PROTECTED_ACTION_TYPES = {
 	'logmonitor_init',
 	'logmonitor_wait_for_state',
 	'logmonitor_get_filter_results',
-	'uia_wait_for_popup',
-	'uia_select_autofill',
+	'trigger_and_autofill',
 }
 
 

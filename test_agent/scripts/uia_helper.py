@@ -16,9 +16,8 @@ def _get_uia_client():
         return UIAutomationClient
     except ImportError:
         # 如果没有生成，则动态生成
-        print("正在生成 UI Automation 类型库...")
-        import comtypes.client
-        uia = comtypes.client.GetModule("UIAutomationCore.dll")
+        print("[UIA] 正在生成 UI Automation 类型库...")
+        comtypes.client.GetModule("UIAutomationCore.dll")
         from comtypes.gen import UIAutomationClient
         print("类型库生成完成")
         return UIAutomationClient
@@ -38,30 +37,6 @@ class UIAHelper:
         )
         self.root = self.uia.GetRootElement()
     
-    def _check_element_for_popup_features(self, element: Any, all_text_content: list) -> bool:
-        """
-        检查一个元素是否有足够的Express Checkout特征字符串（>=3个匹配）。
-        all_text_content 已经预先填充了按钮名称。
-        """
-        feature_strings = {
-            'Contact info',      # IDS_EDGE_EC_INLINE_CONTACT_INFO
-            'Payment methods',   # IDS_EDGE_WALLET_PAYMENT_METHODS
-            'Autofill',         # IDS_EDGE_EC_INLINE_AUTOFILL
-            'Saved info',       # IDS_EDGE_EC_INLINE_SAVED_INFO
-            'Saved cards',      # IDS_EDGE_EC_INLINE_SAVED_CARDS
-            'Manage',           # IDS_EDGE_EC_INLINE_Manage
-        }
-        matched_features = []
-        for feature in feature_strings:
-            if any(feature in text for text in all_text_content):
-                matched_features.append(feature)
-                print(f"[UIA]   ✓ Found feature: '{feature}'")
-        if len(matched_features) >= 3:
-            print(f"[UIA]   ✅ Express Checkout Popup matched ({len(matched_features)} features)")
-            return True
-        # print(f"  ✗ Not enough features matched ({len(matched_features)}/3 required)")
-        return False
-
     def _collect_text(self, element: Any) -> list[str]:
         """收集 element 下所有 Text 控件的 CurrentName。"""
         result = []
@@ -98,7 +73,6 @@ class UIAHelper:
                 name = buttons.GetElement(i).CurrentName
                 if name and name.strip():
                     names.append(name)
-                    # vprint(f"    Button {i}: '{name}'")
             except:
                 continue
         return names, buttons
@@ -197,11 +171,11 @@ class UIAHelper:
                 try:
                     name = window.CurrentName
                     # 只在Edge浏览器窗口中搜索
-                    if 'edge' not in name.lower() and 'microsoft' not in name.lower():
+                    if not name or ('edge' not in name.lower() and 'microsoft' not in name.lower()):
                         continue
                     
                     # vprint(f"[UIA]   Searching in: {name}")
-                    
+
                     # 在窗口内搜索所有Dialog元素
                     dialog_condition = self.uia.CreatePropertyCondition(
                         UIAutomationClient.UIA_ControlTypePropertyId,
@@ -219,13 +193,6 @@ class UIAHelper:
                         
                         try:
                             rect = dialog.CurrentBoundingRectangle
-                            # width = rect.right - rect.left
-                            # height = rect.bottom - rect.top
-                            
-                            # 检查宽度是否匹配
-                            # vprint(f"shit!!!!!    Pane #{j+1}: {width}x{height}")
-                            # if 300 <= width <= 320:
-                            # vprint(f"    Pane #{j+1}: {width}x{height} ✓ in range")
 
                             # 检查是否有Express Checkout特征
                             result = self._has_express_checkout_popup_features(dialog, verbose=verbose)
@@ -323,7 +290,7 @@ class UIAHelper:
 
             # vprint(f"[find_option_buttons] Found {buttons.Length} total buttons")
 
-            # 过滤出真正的选项按钮（排除 "Autofill", "More actions" 等操作按钮）
+            # 选项按钮的特征：name 很长，包含 "Contact info" 或 "Payment methods"
             options = []
             for i in range(buttons.Length):
                 button = buttons.GetElement(i)
@@ -348,28 +315,6 @@ class UIAHelper:
             traceback.print_exc()
             return []
 
-    def find_buttons(self, parent_element: Any) -> List[Any]:
-        """查找按钮"""
-        try:
-            condition = self.uia.CreatePropertyCondition(
-                UIAutomationClient.UIA_ControlTypePropertyId,
-                UIAutomationClient.UIA_ButtonControlTypeId
-            )
-            
-            buttons = parent_element.FindAll(
-                UIAutomationClient.TreeScope_Descendants,
-                condition
-            )
-            
-            result = []
-            for i in range(buttons.Length):
-                result.append(buttons.GetElement(i))
-            
-            return result
-        except Exception as e:
-            print(f"Error finding buttons: {e}")
-            return []
-    
     def invoke_element(self, element: Any) -> bool:
         """调用元素（点击）。优先 InvokePattern，fallback 到 LegacyIAccessiblePattern.DoDefaultAction。"""
         try:
@@ -437,9 +382,7 @@ class UIAHelper:
             if popup is None:
                 return {'success': False, 'error': 'Popup not found'}
 
-            # 1. 查找选项按钮（使用新的 find_option_buttons）
             option_buttons = self.find_option_buttons(popup, verbose=False)
-            # print(f"Found {len(option_buttons)} option buttons")
 
             if len(option_buttons) > profile_index:
                 print(f"Selecting option button at index {profile_index}")
@@ -447,14 +390,14 @@ class UIAHelper:
                 time.sleep(0.3)  # 等待UI响应
 
             # 2. 查找并点击 Autofill 按钮
-            all_buttons = self.find_buttons(popup)
-            # print(f"Found {len(all_buttons)} total buttons")
+            _, all_buttons = self._collect_buttons_text(popup, verbose=False)
 
             autofill_button = None
-            for button in all_buttons:
+            for i in range(all_buttons.Length):
                 try:
+                    button = all_buttons.GetElement(i)
                     name = button.CurrentName
-                    if name and name.strip() == 'Autofill':  # 精确匹配 "Autofill"
+                    if name and name.strip() == 'Autofill':
                         autofill_button = button
                         print(f"[UIA] Found Autofill button")
                         break

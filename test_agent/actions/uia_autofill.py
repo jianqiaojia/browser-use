@@ -1,13 +1,13 @@
 """
-UIA Autofill Actions — wait for the Edge Express Checkout popup and select an autofill entry.
+UIA Autofill Actions — trigger Edge Express Checkout popup and select an autofill entry.
 
-Both actions share a single UIAHelper instance created at registration time.
+Single combined action: cdp_click → wait for popup → select autofill, with auto-retry.
+Uses CSS selector (not DOM index) for stable replay across page loads.
 """
 
 import asyncio
-import time
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from browser_use.browser.session import BrowserSession
 from browser_use.tools.registry.service import Registry
 from browser_use.agent.views import ActionResult
@@ -15,98 +15,90 @@ from browser_use.agent.views import ActionResult
 from test_agent.scripts.uia_helper import UIAHelper
 
 
-class UIAWaitForPopupModel(BaseModel):
-	timeout: float = 10.0
-	check_interval: float = 1.0
+class TriggerAndAutofillModel(BaseModel):
+	input_selector: str = Field(
+		description='CSS selector of the input field to trigger Edge Express Checkout autofill popup (e.g. "#email" or "[name=\\"cardnumber\\"]")'
+	)
+	profile_index: int = Field(default=0, description='Index of the contact info profile to select (0 = first)')
+	payment_index: int = Field(default=0, description='Index of the payment method to select (0 = first)')
 
 
-class UIASelectAutofillModel(BaseModel):
-	profile_index: int = 0
-	payment_index: int = 0
+async def _trigger_popup(
+	selector: str,
+	browser_session: BrowserSession,
+) -> bool:
+	"""CDP click by CSS selector to trigger popup. Returns False if click failed."""
+	from test_agent.actions.cdp_click import execute_cdp_click_by_selector
+	result = await execute_cdp_click_by_selector(selector, browser_session)
+	if result.error:
+		print(f'[TriggerAndAutofill] cdp_click failed: {result.error}')
+		return False
+	return True
 
 
-async def execute_uia_wait_for_popup(
-	params: UIAWaitForPopupModel,
+async def _select_autofill(
 	uia_helper: UIAHelper,
+	selector: str,
+	browser_session: BrowserSession,
+	profile_index: int,
+	payment_index: int,
+) -> dict:
+	"""Wait for popup then select_and_confirm; re-triggers once if popup not found."""
+	result = uia_helper.select_and_confirm(profile_index=profile_index, payment_index=payment_index)
+	if not result.get('success') and 'Popup not found' in result.get('error', ''):
+		print(f'[TriggerAndAutofill] Popup not found, re-triggering...')
+		await _trigger_popup(selector, browser_session)
+		await asyncio.sleep(1.0)
+		result = uia_helper.select_and_confirm(profile_index=profile_index, payment_index=payment_index)
+	return result
+
+
+async def execute_trigger_and_autofill(
+	params: TriggerAndAutofillModel,
+	uia_helper: UIAHelper,
+	browser_session: BrowserSession,
+	max_attempts: int = 3,
 ) -> ActionResult:
-	"""Poll until the autofill popup is visible or timeout expires."""
-	print(f'[UIA] Waiting for autofill popup (timeout: {params.timeout}s, interval: {params.check_interval}s)...')
-	start_time = time.time()
-	check_count = 0
+	"""Click input → select autofill, with retry loop."""
+	for attempt in range(1, max_attempts + 1):
+		print(f'\n[TriggerAndAutofill] Attempt {attempt}/{max_attempts}')
 
-	while (time.time() - start_time) < params.timeout:
-		check_count += 1
-		try:
-			result = uia_helper.find_autofill_popup()
-			if result and result.get('success'):
-				elapsed = time.time() - start_time
-				msg = f'[UIA] ✅ Autofill popup detected after {elapsed:.1f}s ({check_count} checks)'
-				print(msg)
-				return ActionResult(extracted_content=msg, include_in_memory=True)
-		except Exception as e:
-			print(f'[UIA] Check #{check_count} error: {str(e)}')
-		await asyncio.sleep(params.check_interval)
+		if not await _trigger_popup(params.input_selector, browser_session):
+			await asyncio.sleep(1.0)
+			continue
 
-	elapsed = time.time() - start_time
-	msg = f'[UIA] ❌ Timeout: Autofill popup not detected after {elapsed:.1f}s ({check_count} checks)'
+		select_result = await _select_autofill(
+			uia_helper, params.input_selector, browser_session,
+			params.profile_index, params.payment_index,
+		)
+		if select_result.get('success'):
+			msg = f'[TriggerAndAutofill] ✅ Autofill selected (attempt {attempt})'
+			if select_result.get('warning'):
+				msg += f' (warning: {select_result["warning"]})'
+			print(msg)
+			return ActionResult(extracted_content=msg, include_in_memory=True)
+		print(f'[TriggerAndAutofill] select failed: {select_result.get("error", "Unknown")}')
+
+	msg = f'[TriggerAndAutofill] ❌ Failed after {max_attempts} attempts'
 	print(msg)
 	return ActionResult(error=msg, include_in_memory=True, success=False)
 
 
-async def execute_uia_select_autofill(
-	params: UIASelectAutofillModel,
-	uia_helper: UIAHelper,
-) -> ActionResult:
-	"""Click the autofill button via UIA Helper."""
-	print(f'[UIA] Clicking autofill button (profile_index: {params.profile_index}, payment_index: {params.payment_index})...')
-	try:
-		result = uia_helper.select_and_confirm(
-			profile_index=params.profile_index,
-			payment_index=params.payment_index,
-		)
-		if result.get('success'):
-			msg = f'[UIA] ✅ Autofill selected at index {params.profile_index}'
-			if result.get('warning'):
-				msg += f' (warning: {result.get("warning")})'
-			print(msg)
-			return ActionResult(extracted_content=msg, include_in_memory=True)
-		else:
-			error = result.get('error', 'Unknown error')
-			msg = f'[UIA] ❌ Failed to select autofill: {error}'
-			print(msg)
-			return ActionResult(error=msg, include_in_memory=True, success=False)
-	except Exception as e:
-		msg = f'[UIA] ❌ Unexpected error: {str(e)}'
-		print(msg)
-		return ActionResult(error=msg, include_in_memory=True, success=False)
-
-
 def register_uia_autofill(registry: Registry) -> None:
-	"""Register uia_wait_for_popup and uia_select_autofill actions."""
+	"""Register trigger_and_autofill action."""
 	uia_helper = UIAHelper()
 
 	@registry.action(
 		description=(
-			'Wait for the Edge Express Checkout autofill popup to become visible. '
-			'Polls repeatedly until detected or timeout expires. '
-			'Call this after focusing an input field to confirm the popup appeared before proceeding.'
+			'Trigger the Edge Express Checkout autofill popup by clicking an input field, '
+			'then click the autofill button to fill the form. '
+			'Automatically retries up to 3 times if the popup does not appear or disappears. '
+			'Pass input_selector = CSS selector of the input field (e.g. "#email" or "[name=\\"cardnumber\\"]").'
 		),
-		param_model=UIAWaitForPopupModel,
+		param_model=TriggerAndAutofillModel,
 	)
-	async def uia_wait_for_popup(
-		params: UIAWaitForPopupModel,
+	async def trigger_and_autofill(
+		params: TriggerAndAutofillModel,
 		browser_session: BrowserSession,
 	) -> ActionResult:
-		return await execute_uia_wait_for_popup(params, uia_helper)
-
-	@registry.action(
-		description=(
-			'Click the autofill button using UIA Helper — use this after popup is detected '
-			'to trigger autofill and automatically fill the form.'
-		),
-		param_model=UIASelectAutofillModel,
-	)
-	async def uia_select_autofill(
-		params: UIASelectAutofillModel,
-	) -> ActionResult:
-		return await execute_uia_select_autofill(params, uia_helper)
+		return await execute_trigger_and_autofill(params, uia_helper, browser_session)

@@ -6,9 +6,63 @@
 目标是建立全自动精炼闭环：首次 LLM 探索，自动精炼出最短有效路径写入 `replay.json`，
 后续直接回放（无 LLM，~25s）；回放失败时 LLM 断点续跑，自动精炼新段并合并，全程无人工介入。
 
-**实测数据（Nike_autofill_Guest，checkout 阶段）：**
-- explore（首次）：83.2s，5步 LLM 探索 → 精炼 → 存 replay.json
-- replay（后续）：24.7s，确定性 rerun，无 LLM 推理，快 3.4×
+**实测数据（Nike_autofill_Guest，端到端 Phase 1 + Phase 2）：**
+
+<table>
+<thead>
+<tr>
+  <th>场景</th>
+  <th style="border-left: 2px solid #888; padding-left:8px">Phase 1</th>
+  <th>Phase 1 耗时</th>
+  <th>Phase 1 Token</th>
+  <th style="border-left: 2px solid #888; padding-left:8px">Phase 2 模式</th>
+  <th>Phase 2 耗时</th>
+  <th>Phase 2 Token</th>
+  <th style="border-left: 2px solid #888; padding-left:8px">总耗时</th>
+  <th>总 Token</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>cart 空 + 未登录</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">需重建 (16步)</td>
+  <td>232.1s</td>
+  <td>~190k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">LLM explore → 精炼 → 存 replay.json</td>
+  <td>133.7s</td>
+  <td>~103k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">366.0s</td>
+  <td>~293k</td>
+</tr>
+<tr>
+  <td>cart 有商品</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">直通 (2步)</td>
+  <td>50.7s</td>
+  <td>~26k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">LLM explore → 精炼 → 存 replay.json</td>
+  <td>164.4s</td>
+  <td>~118k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">215.4s</td>
+  <td>~144k</td>
+</tr>
+<tr>
+  <td>cart 有商品</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">直通 (2步)</td>
+  <td>52.3s</td>
+  <td>~25k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">replay 回放，0 LLM</td>
+  <td>36.0s</td>
+  <td>0</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">88.3s</td>
+  <td>~25k</td>
+</tr>
+</tbody>
+</table>
+
+**关键结论**：
+- **双 Profile 节省**：每个测试用例使用独立 Edge profile，cookie 保留登录态和 cart 商品，Phase 1 从"重建 cart（16步，232s）"退化为"直通 checkout（2-3步，~50s）"，Phase 1(pre-checkout) 耗时减少 78%（232s → 50s），token 减少 86%（~190k → ~26k）
+- **replay 节省**：Phase 2 (checkout) 耗时减少 78%（164s → 36s），token 减少 100%（118k → 0）
+- **合计**：端到端耗时减少 76%（366s → 88s），token 减少 91%（~293k → ~25k）
 
 ---
 
@@ -206,4 +260,4 @@ test_agent/
 
 ---
 
-**维护日期**：2026-04-02
+**维护日期**：2026-04-03
