@@ -124,6 +124,8 @@ class ReplayManager:
 		Returns:
 			True 表示测试通过，False 表示失败
 		"""
+		self._phase2_tokens: int = 0
+
 		t0 = time.perf_counter()
 		print('[ReplayManager] [pre-checkout] starting...')
 		pre_checkout_agent = Agent(
@@ -138,7 +140,8 @@ class ReplayManager:
 		if not pre_checkout_history or not pre_checkout_history.is_successful():
 			print('[ReplayManager] [pre-checkout] ❌ failed')
 			return False
-		print(f'[ReplayManager] [pre-checkout] ✅ done ({len(pre_checkout_history.history)} steps, {time.perf_counter()-t0:.1f}s)')
+		p1_tokens = pre_checkout_history.usage.total_tokens if pre_checkout_history.usage else 0
+		print(f'[ReplayManager] [pre-checkout] ✅ done ({len(pre_checkout_history.history)} steps, {time.perf_counter()-t0:.1f}s, {p1_tokens} tokens)')
 
 		print(f'[ReplayManager] [checkout] {self.replay_path.name}')
 		t1 = time.perf_counter()
@@ -149,7 +152,7 @@ class ReplayManager:
 		else:
 			logger.info(f'[ReplayManager] {len(replay.history)} steps → rerun')
 			success = await self._run_rerun_with_heal(replay, browser_session)
-		print(f'[ReplayManager] [checkout] {"✅ done" if success else "❌ failed"} ({time.perf_counter()-t1:.1f}s)')
+		print(f'[ReplayManager] [checkout] {"✅ done" if success else "❌ failed"} ({time.perf_counter()-t1:.1f}s, {self._phase2_tokens} tokens)')
 		return success
 
 	# ------------------------------------------------------------------
@@ -174,6 +177,7 @@ class ReplayManager:
 
 		success = raw_history.is_successful()
 		logger.info(f'[ReplayManager] LLM explore done, success={success}, steps={len(raw_history.history)}')
+		self._phase2_tokens += raw_history.usage.total_tokens if raw_history.usage else 0
 
 		if not success:
 			logger.warning('[ReplayManager] LLM explore did not succeed, not saving replay')
@@ -306,6 +310,7 @@ class ReplayManager:
 
 		tail_success = tail_history.is_successful()
 		logger.info(f'[ReplayManager] LLM heal done, success={tail_success}, tail_steps={len(tail_history.history)}')
+		self._phase2_tokens += tail_history.usage.total_tokens if tail_history.usage else 0
 
 		if not tail_success:
 			logger.warning('[ReplayManager] LLM heal did not succeed')

@@ -113,7 +113,7 @@ async def run_test_case(
 				await browser_session.stop()
 			except Exception:
 				pass
-		print(f"[TestRunner] ⏱️  {time.perf_counter()-t0:.1f}s — {'✅ PASS' if success else '❌ FAIL'}")
+		print(f"[TestRunner] ⏱️⏱️⏱️  {time.perf_counter()-t0:.1f}s — {'✅ PASS' if success else '❌ FAIL'}")
 
 		if focus_manager:
 			focus_manager.stop()

@@ -52,21 +52,26 @@ def _get_uia_client():
 
 def bring_window_to_foreground() -> bool:
 	"""
-	Bring browser window to foreground using UIA in a new thread.
+	将 Edge 主窗口置于前台（OS 层面）。
 
-	This function creates a new thread to handle window focus setting.
-	The new thread will bind to the current Input Desktop (Console Desktop after tscon),
-	allowing SetForegroundWindow to succeed even if the main thread is bound to an old
-	RDP Desktop.
+	在新线程中执行，原因：tscon 切换 RDP Desktop 后，主线程绑定的是旧 Desktop，
+	新线程会绑定到当前 Input Desktop（Console），SetForegroundWindow 才能成功。
 
-	This is CRITICAL! Edge checks HasFocus() before showing autofill popup:
-	  if ((!rwhv || !rwhv->HasFocus()) && IsRootPopup()) {
-	    Hide(SuggestionHidingReason::kNoFrameHasFocus);
-	    return;
-	  }
+	⚠️ 局限性：此函数只恢复 OS 窗口的 Z-order，不能恢复 renderer 的焦点。
+	Edge autofill popup 的显示逻辑（autofill_popup_controller_impl_edge.cc:594）：
+
+	    if ((!rwhv || !rwhv->HasFocus()) && IsRootPopup()) {
+	        Hide(SuggestionHidingReason::kNoFrameHasFocus);
+	        return;
+	    }
+
+	rwhv->HasFocus() 检查的是 Chrome_RenderWidgetHostHWND（renderer 子窗口）是否
+	持有 WM_SETFOCUS。当 Edge 内部 overlay（如 Shopping 弹窗）弹出时，focus 从
+	renderer 子窗口转走，SetForegroundWindow(main_hwnd) 无法恢复它。
+	需要在此函数之后调用 Target.activateTarget 才能完整恢复 renderer focus。
 
 	Returns:
-		True if window was brought to foreground, False otherwise
+	    True if window was brought to foreground, False otherwise
 	"""
 	success = [False]  # Use list to share result between threads
 
@@ -251,8 +256,17 @@ async def execute_cdp_click(
 	print(f"\n[CDP Click] Target: {tag} {attr_str}")
 
 	try:
-		# CRITICAL Step 1: Bring window to foreground
-		print(f"[CDP Click] Step 1: Setting window focus...")
+		# CRITICAL Step 1: 先用 CDP 恢复 renderer focus，再把窗口置顶
+		# 顺序很重要：activateTarget 让 Chrome_RenderWidgetHostHWND 收到 WM_SETFOCUS，
+		# 之后 SetForegroundWindow 把主窗口置顶，两者合并才能满足 rwhv->HasFocus() 检查。
+		print(f"[CDP Click] Step 1: Activating target (renderer focus)...")
+		try:
+			await page._client.send.Target.activateTarget(params={'targetId': page._target_id})
+			print(f"[CDP Click] Step 1: Target activated")
+		except Exception as e:
+			print(f"[CDP Click] ⚠️  activateTarget failed: {e}")
+
+		print(f"[CDP Click] Step 1b: Setting window foreground...")
 		focus_success = bring_window_to_foreground()
 		if not focus_success:
 			print(f"[CDP Click] ⚠️  Warning: Failed to set window focus, click may not trigger autofill")
