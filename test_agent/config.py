@@ -110,6 +110,8 @@ class TestAgentConfig:
             'args': [
                 '--enable-logging',
                 '--vmodule=native_wallet_checkout_manager=1,shipping_address_form=2',
+                '--disable-extensions',  # 禁用扩展以减少干扰和提升性能
+                '--no-first-run',
                 '--disable-blink-features=AutomationControlled',
                 *([] if not self.enable_features else [self.enable_features]),
                 *([] if not self.disable_features else [self.disable_features])

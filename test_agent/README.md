@@ -103,13 +103,10 @@ cd C:\repos\browser-use\test_agent
 
 输出 `Found code: XXXXXXXX` 即表示 Outlook COM 连接正常。
 
-### 5. 关闭所有 Edge 扩展 & 禁用 Microsoft Shopping
+### 5. 禁用 Microsoft Shopping(可以不做)
 
 Edge 扩展和内置 Shopping 弹窗会抢占 OS 焦点，导致 autofill popup 被关闭。
-
-**关闭扩展：** 打开 Edge → `edge://extensions` → 逐一关闭所有扩展。
-
-**禁用 Microsoft Shopping（内置功能，无法通过扩展页关闭）(可以不做)：** 以管理员身份运行：
+**禁用 Microsoft Shopping（内置功能，无法通过扩展页关闭）：** 以管理员身份运行：
 
 ```powershell
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v EdgeShoppingAssistantEnabled /t REG_DWORD /d 0 /f
