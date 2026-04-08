@@ -2,8 +2,7 @@
     "domain": "https://www.nike.com",
     "site_pre_checkout_guidance": [
         "If the cart already has a valid item, navigate directly to the checkout URL (e.g. https://www.nike.com/checkout) to skip the product flow.",
-        "Before evaluating cart state, wait 3 seconds for the page to finish loading; ensure the cart has exactly one valid item — remove unavailable items (sold out/out of stock) or extra items; if empty, add any available product.",
-        "Prefer products with high stock availability — avoid items marked 'Just a few left', 'Low stock', or 'Sold Out'. Choose a common size (M or 10) to reduce sold-out risk."
+        "Before evaluating cart state, wait 3 seconds for the page to finish loading; ensure the cart has exactly one valid item — remove unavailable items (sold out/out of stock) or extra items; if empty, add any available product."
     ],
     "site_checkout_guidance": [
         "To trigger the autofill popup, focus the email or firstName field (do not use payment/card fields).",

@@ -33,7 +33,7 @@ from browser_use import BrowserProfile, BrowserSession, Tools
 from test_agent.config import config
 from test_agent.llm.llm_config import get_claude_sonnet as get_claude
 from test_agent.register_custom_actions import register_custom_actions
-from test_agent.scripts.task_builder import load_preambles, build_checkout_task
+from test_agent.scripts.task_builder import load_prompt_templates, build_checkout_task
 from test_agent.scripts.browser_focus_manager import BrowserFocusManager
 from test_agent.replay.replay_manager import ReplayManager
 from test_agent.models import TestCase
@@ -52,7 +52,7 @@ async def main():
 	print(f'存在: {replay_path.exists()}')
 
 	# 构造 checkout task
-	_, checkout_preamble = load_preambles()
+	_, checkout_preamble = load_prompt_templates()
 	test_case = TestCase(
 		name=test_case_name,
 		checkout_guidance=(

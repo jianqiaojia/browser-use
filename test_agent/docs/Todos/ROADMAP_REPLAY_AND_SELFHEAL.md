@@ -64,6 +64,51 @@
 - **replay 节省**：Phase 2 (checkout) 耗时减少 78%（164s → 36s），token 减少 100%（118k → 0）
 - **合计**：端到端耗时减少 76%（366s → 88s），token 减少 91%（~293k → ~25k）
 
+**实测数据（Booking_Guest_Checkout，端到端 Phase 1 + Phase 2）：**
+
+<table>
+<thead>
+<tr>
+  <th>场景</th>
+  <th style="border-left: 2px solid #888; padding-left:8px">Phase 1</th>
+  <th>Phase 1 耗时</th>
+  <th>Phase 1 Token</th>
+  <th style="border-left: 2px solid #888; padding-left:8px">Phase 2 模式</th>
+  <th>Phase 2 耗时</th>
+  <th>Phase 2 Token</th>
+  <th style="border-left: 2px solid #888; padding-left:8px">总耗时</th>
+  <th>总 Token</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>无商品 + 未登录</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">搜索+选房 (9步)</td>
+  <td>159.6s</td>
+  <td>~157k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">LLM explore → 精炼 → 存 replay.json</td>
+  <td>74.0s</td>
+  <td>~78k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">233.7s</td>
+  <td>~235k</td>
+</tr>
+<tr>
+  <td>无商品 + 未登录</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">搜索+选房 (9步)</td>
+  <td>171.7s</td>
+  <td>~168k</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">replay 回放，0 LLM</td>
+  <td>26.2s</td>
+  <td>0</td>
+  <td style="border-left: 2px solid #888; padding-left:8px">198.0s</td>
+  <td>~168k</td>
+</tr>
+</tbody>
+</table>
+
+**关键结论**：
+- **replay 节省（Booking）**：Phase 2 (checkout) 耗时减少 65%（74s → 26s），token 减少 100%（78k → 0）
+
 ---
 
 ## 架构决策记录

@@ -1,0 +1,12 @@
+{
+    "domain": "https://www.booking.com",
+    "test_cases": [
+        {
+            "name": "Booking_Guest_Checkout",
+            "profile": "guest_with_cookie",
+            "pre_checkout_instructions": [
+                "You must be in guest mode — do not sign in at any point during this test."
+            ]
+        }
+    ]
+}

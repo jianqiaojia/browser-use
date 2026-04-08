@@ -1,5 +1,5 @@
 """
-Task builder：从 preambles.json 模板 + 测试用例数据构建 Phase 1 / Phase 2 task 字符串。
+Task builder：从 prompt_templates.py 模板 + 测试用例数据构建 Phase 1 / Phase 2 task 字符串。
 """
 import re
 from pathlib import Path
@@ -7,13 +7,13 @@ from pathlib import Path
 from test_agent.models import TestCase
 
 
-def load_preambles() -> tuple[str | None, str | None]:
-	"""Load pre_checkout and checkout preamble templates from preambles.py."""
+def load_prompt_templates() -> tuple[str | None, str | None]:
+	"""Load pre_checkout and checkout prompt templates from prompt_templates.py."""
 	import importlib.util
-	path = Path(__file__).parent.parent / "test_case" / "preambles.py"
+	path = Path(__file__).parent.parent / "test_case" / "prompt_templates.py"
 	if not path.exists():
 		return None, None
-	spec = importlib.util.spec_from_file_location("preambles", path)
+	spec = importlib.util.spec_from_file_location("prompt_templates", path)
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
 	return getattr(module, "pre_checkout", None), getattr(module, "checkout", None)
@@ -45,8 +45,9 @@ def _fill_preamble(
 	all_lines = sg_lines + tg_lines
 	if all_lines:
 		guidance_text = "\n".join(f"- {l}" for l in all_lines)
-		text = text.replace("{--Guidance--}", f"# Guidance\nGuidance is advisory — use your judgment based on what you actually see in the browser.\n{guidance_text}")
+		text = text.replace("{--Guidance--}", guidance_text)
 	else:
+		text = re.sub(r'# Guidance\nGuidance is advisory[^\n]*\n\{--Guidance--\}', '', text)
 		text = text.replace("{--Guidance--}", "")
 
 	# Collapse consecutive blank lines left by removed sections

@@ -37,7 +37,7 @@ from test_agent.register_custom_actions import register_custom_actions
 from test_agent.scripts.proxy_manager import ProxyAuthWatcher, init_proxy, get_proxy, mark_proxy_result
 from test_agent.scripts.browser_focus_manager import BrowserFocusManager
 from test_agent.scripts.windows_helper import kill_edge_processes
-from test_agent.scripts.task_builder import load_preambles, build_pre_checkout_task, build_checkout_task
+from test_agent.scripts.task_builder import load_prompt_templates, build_pre_checkout_task, build_checkout_task
 from test_agent.replay.replay_manager import ReplayManager
 
 
@@ -143,14 +143,14 @@ async def run_test_file(
 	llm: Any,
 	enable_focus_manager: bool = False,
 	test_case_filter: str | None = None,
-) -> bool:
+) -> bool | None:
 	"""Run all test cases from a *.test.json file."""
 	print(f"\n{'='*60}")
 	print(f"Loading test file: {test_file}")
 	print(f"{'='*60}")
 
 	site_test = load_test_file(test_file)
-	pre_checkout_preamble, checkout_preamble = load_preambles()
+	pre_checkout_preamble, checkout_preamble = load_prompt_templates()
 
 	# replay files live next to the test file
 	replay_dir = Path(test_file).parent
@@ -202,7 +202,7 @@ async def run_test_file(
 	if total:
 		print(f"  Success Rate: {passed/total*100:.1f}%")
 
-	return total > 0 and (total - passed) == 0
+	return total > 0 and (total - passed) == 0 if total > 0 else None
 
 
 async def main():
@@ -258,14 +258,18 @@ async def main():
 
 	# Run all test files
 	all_success = True
+	ran_any = False
 	for test_file in test_files:
-		success = await run_test_file(
+		result = await run_test_file(
 			str(test_file),
 			llm,
 			enable_focus_manager=enable_focus_manager,
 			test_case_filter=args.test_case,
 		)
-		if not success:
+		if result is None:
+			continue  # all cases filtered out — do not count as failure
+		ran_any = True
+		if not result:
 			all_success = False
 
 	# Overall summary
@@ -273,13 +277,31 @@ async def main():
 	print("Overall Test Run Summary")
 	print(f"{'='*60}")
 	print(f"Files: {len(test_files)}")
-	print(f"Status: {'[OK] ALL PASSED' if all_success else '[FAIL] SOME FAILED'}")
+	print(f"Status: {'[OK] ALL PASSED' if (all_success and ran_any) else '[FAIL] SOME FAILED'}")
 
-	sys.exit(0 if all_success else 1)
+	return 0 if (all_success and ran_any) else 1
 
 
 if __name__ == "__main__":
 	import warnings
+	import gc
 	warnings.filterwarnings("ignore", category=ResourceWarning)
 
-	asyncio.run(main())
+	loop = asyncio.ProactorEventLoop()
+	asyncio.set_event_loop(loop)
+	try:
+		exit_code = loop.run_until_complete(main())
+	finally:
+		# Drain all remaining callbacks so transports can close cleanly.
+		# This fixes the Windows ProactorEventLoop pipe-transport __del__ warning
+		# (Python issue #86817): GC runs after the loop is closed and the transport's
+		# __repr__ tries to call fileno() on an already-closed pipe.
+		try:
+			loop.run_until_complete(asyncio.sleep(0))
+			gc.collect()
+			loop.run_until_complete(asyncio.sleep(0))
+		except Exception:
+			pass
+		loop.close()
+
+	sys.exit(exit_code)
