@@ -46,9 +46,31 @@ ihg.com、hotels.com、secure.booking.com — 航班/酒店价格+库存实时�
 当前只跑了主流程，需要覆盖更多边界情况：
 - 购物车为空 / 有不可用商品
 - Nike 要求邮箱验证码而非密码
-- autofill popup 不出现的 fallback
 - 网络慢 / 页面加载超时
 - replay 回放元素找不到时的续跑
+
+### 3b. 测试 autofill 失败场景
+需要验证以下失败路径行为正确：
+
+**Popup 不出现**
+- `trigger_and_autofill` 重试 3 次后返回 `ActionResult(error=...)`
+- Agent 应记录失败并通知 done，不应无限等待
+- 验证 logmonitor 此时返回什么 state（例如 `AutofillNotTriggered`）
+
+**Popup 出现但 Autofill 按钮未找到**
+- `select_and_confirm` 返回 `{'success': True, 'warning': 'Autofill button not found'}`
+- Agent 应将 warning 写入 memory，logmonitor 的 state 是否仍然 `AutofillSucceeded`？
+
+**Autofill 填充后字段验证失败**
+- logmonitor 返回 `AutofillFailed` 或其他非 Succeeded state
+- Agent 是否有 fallback（手动填写字段）？还是直接 done(failed)？
+
+**CSS selector 找不到触发字段**
+- `execute_cdp_click_by_selector` 返回 `ActionResult(error='Element not found: ...')`
+- Agent 是否尝试其他 selector 或上报失败？
+
+**待补充**：各场景在 `logmonitor_wait_for_state` 超时时的实际返回值。
+相关文件：`test_agent/actions/uia_autofill.py`、`test_agent/scripts/uia_helper.py`、logmonitor action
 
 ### 4. 标准化 test case 模板 + Tricks 文档
 - `*.test.json` 编写规范（task_preamble、shared_steps、params 用法）
@@ -85,4 +107,4 @@ Nike 稳定后逐步扩展到其他 checkout site。
 
 ---
 
-**维护日期**：2026-04-01
+**维护日期**：2026-04-08

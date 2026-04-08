@@ -13,12 +13,9 @@ This module provides centralized configuration for:
 - 仅更新注释以反映新版 API
 """
 
+import os
 from pathlib import Path
-from typing import Final, Dict, List, Any, Optional
-from test_agent.llm.free_proxy_pool import ProxyPool, ProxyServer
-
-# Import for browser proxy settings
-from browser_use.browser.profile import ProxySettings
+from typing import Final, Dict, Any
 
 # Directory Configuration
 BASE_DIR: Final[Path] = Path("test_agent")
@@ -58,15 +55,15 @@ DEFAULT_FEATURE: Final[str] = "DID"
 DEFAULT_RESULT_FOLDER: Final[str] = 'test_results'
 
 # Azure OpenAI Configuration (环境变量或直接设置)
-import os
 AZURE_OPENAI_ENDPOINT: Final[str] = os.getenv('AZURE_OPENAI_ENDPOINT', 'https://xpay-mobius.openai.azure.com/')
 AZURE_OPENAI_API_KEY: Final[str] = os.getenv('OPENAI_API_KEY', 'your-api-key')
 AZURE_OPENAI_DEPLOYMENT_NAME: Final[str] = 'gpt-4o'
 AZURE_OPENAI_API_VERSION: Final[str] = '2024-05-01-preview'
 
+
 class TestAgentConfig:
     """Configuration class for managing test agent settings."""
-    
+
     def __init__(self):
         """Initialize configuration with default values."""
         # Browser settings
@@ -76,7 +73,7 @@ class TestAgentConfig:
         self.profile = DEFAULT_PROFILE
         self.enable_features = ENABLE_FEATURES
         self.disable_features = DISABLE_FEATURES
-        
+
         # Agent settings
         self.max_actions_per_step = MAX_ACTIONS_PER_STEP
         self.max_steps = MAX_STEPS
@@ -86,13 +83,13 @@ class TestAgentConfig:
         self.rerun_max_retries = RERUN_MAX_RETRIES
         self.rerun_delay_between_actions = RERUN_DELAY_BETWEEN_ACTIONS
         self.rerun_max_step_interval = RERUN_MAX_STEP_INTERVAL
-        
+
         # Test settings
         self.default_site_type = DEFAULT_SITE_TYPE
         self.default_priority = DEFAULT_PRIORITY
         self.default_feature = DEFAULT_FEATURE
         self.test_result_folder = DEFAULT_RESULT_FOLDER
-        
+
         # Azure OpenAI settings (兼容旧版配置方式)
         self.AZURE_OPENAI_ENDPOINT = AZURE_OPENAI_ENDPOINT
         self.AZURE_OPENAI_API_KEY = AZURE_OPENAI_API_KEY
@@ -101,17 +98,12 @@ class TestAgentConfig:
         self.HEADLESS = False
         self.CHROME_ARGS = ['--disable-blink-features=AutomationControlled']
 
-        # Proxy settings
-        self.use_proxy = False
-        self.proxy_pool: Optional[ProxyPool] = None
-        self._current_proxy: Optional[ProxyServer] = None
-        
     def get_browser_profile_config(self) -> Dict[str, Any]:
         """Get browser profile configuration dictionary.
 
         新版：返回 BrowserProfile 所需的配置
         """
-        config = {
+        return {
             'executable_path': self.edge_path,  # 新版使用 executable_path
             'user_data_dir': self.user_data_dir,  # BrowserProfile 直接接受此参数
             'profile_directory': self.profile,  # 新版使用 profile_directory
@@ -138,48 +130,6 @@ class TestAgentConfig:
             'interaction_highlight_duration': 0.3,   # 默认 1.0s → 元素高亮持续时间（纯视觉，不影响逻辑）
         }
 
-        # Add proxy if configured (will be set by async call)
-        # Note: Proxy must be set via BrowserProfile.proxy parameter after async init
-        return config
-        
-    async def init_proxy_pool(self, max_proxies: int = 30) -> None:
-        """Initialize free proxy pool.
-
-        Args:
-            max_proxies: Maximum number of proxies to scrape and verify
-        """
-        print(f"[Config] Initializing proxy pool with target: {max_proxies} proxies...")
-        self.proxy_pool = await ProxyPool.create_from_free_sources(max_proxies=max_proxies)
-        self.use_proxy = True
-        print(f"[Config] Proxy pool initialized: {self.proxy_pool.get_stats()}")
-
-    async def get_proxy_for_browser(self) -> Optional[ProxySettings]:
-        """Get next proxy configuration for browser.
-
-        Returns:
-            ProxySettings object or None if no proxy pool
-        """
-        if not self.use_proxy or not self.proxy_pool:
-            return None
-
-        proxy = await self.proxy_pool.get_proxy()
-        if proxy:
-            self._current_proxy = proxy
-            # Return ProxySettings object (BrowserProfile expects this)
-            return ProxySettings(server=proxy.url)
-        return None
-
-    async def mark_proxy_result(self, success: bool, response_time: float = 0.0) -> None:
-        """Mark the result of using current proxy.
-
-        Args:
-            success: Whether the request succeeded
-            response_time: Response time in seconds
-        """
-        if self._current_proxy and self.proxy_pool:
-            await self.proxy_pool.mark_result(self._current_proxy, success, response_time)
-            self._current_proxy = None
-
     def validate(self) -> None:
         """Validate configuration settings."""
         if not Path(self.edge_path).exists():
@@ -193,6 +143,7 @@ class TestAgentConfig:
 
         if self.max_steps <= 0:
             raise ValueError("MAX_STEPS must be positive")
+
 
 # Create global config instance
 config = TestAgentConfig()

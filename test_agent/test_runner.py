@@ -34,6 +34,7 @@ from test_agent.llm.llm_config import get_claude_sonnet as get_claude
 from test_agent.config import config, PROFILE_ALIASES
 from test_agent.models import TestCase, SiteTest
 from test_agent.register_custom_actions import register_custom_actions
+from test_agent.scripts.proxy_manager import ProxyAuthWatcher, init_proxy, get_proxy, mark_proxy_result
 from test_agent.scripts.browser_focus_manager import BrowserFocusManager
 from test_agent.scripts.windows_helper import kill_edge_processes
 from test_agent.scripts.task_builder import load_preambles, build_pre_checkout_task, build_checkout_task
@@ -67,7 +68,7 @@ async def run_test_case(
 			browser_config['profile_directory'] = PROFILE_ALIASES.get(test.profile, test.profile)
 
 		# Get proxy if enabled
-		proxy_settings = await config.get_proxy_for_browser()
+		proxy_settings = await get_proxy()
 		if proxy_settings:
 			browser_config['proxy'] = proxy_settings
 			print(f"[Proxy] Using proxy: {proxy_settings.server}")
@@ -102,6 +103,10 @@ async def run_test_case(
 		# Start shared browser session (keep_alive so Phase 1 → Phase 2 share the same session)
 		keep_alive_profile = browser_profile.model_copy(update={'keep_alive': True})
 		browser_session = BrowserSession(browser_profile=keep_alive_profile)
+
+		if proxy_settings:
+			ProxyAuthWatcher(proxy_settings)
+
 		await browser_session.start()
 
 		t0 = time.perf_counter()
@@ -120,8 +125,8 @@ async def run_test_case(
 			print("[FocusManager] Focus manager stopped")
 
 		# Mark proxy result if used
-		if config.use_proxy and config._current_proxy:
-			await config.mark_proxy_result(success=bool(success), response_time=0.0)
+		if proxy_settings:
+			await mark_proxy_result(success=bool(success), response_time=0.0)
 
 		return success
 
@@ -207,8 +212,7 @@ async def main():
 	)
 	parser.add_argument("--model", default="claude-opus-4-5")
 	parser.add_argument("--proxy", default="http://localhost:5000")
-	parser.add_argument("--use-proxy-pool", action="store_true")
-	parser.add_argument("--max-proxies", type=int, default=30)
+	parser.add_argument("--use-proxy", action="store_true", help="Enable proxy (Webshare primary, free pool fallback)")
 	parser.add_argument("--disable-browser-focus", action="store_true")
 	parser.add_argument("--test-case", default=None,
 		help="Only run test cases whose name contains this substring (case-insensitive)")
@@ -223,12 +227,14 @@ async def main():
 		time.sleep(2)
 
 	# Initialize proxy pool if requested
-	if args.use_proxy_pool:
-		print(f"\n[Init] Initializing free proxy pool (target={args.max_proxies})...")
-		await config.init_proxy_pool(max_proxies=args.max_proxies)
-		if config.proxy_pool:
-			stats = config.proxy_pool.get_stats()
-			print(f"  [OK] {stats['available']}/{stats['total']} proxies available")
+	if args.use_proxy:
+		from test_agent.scripts.proxy_manager import WEBSHARE_API_KEY, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
+		print(f"\n[Init] Initializing proxy pool...")
+		await init_proxy(
+			webshare_api_key=WEBSHARE_API_KEY,
+			webshare_username=WEBSHARE_PROXY_USERNAME,
+			webshare_password=WEBSHARE_PROXY_PASSWORD,
+		)
 
 	# Initialize LLM
 	print(f"\n[Init] Model: {args.model}  Proxy: {args.proxy}")

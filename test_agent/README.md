@@ -103,6 +103,20 @@ cd C:\repos\browser-use\test_agent
 
 输出 `Found code: XXXXXXXX` 即表示 Outlook COM 连接正常。
 
+### 5. 关闭所有 Edge 扩展 & 禁用 Microsoft Shopping
+
+Edge 扩展和内置 Shopping 弹窗会抢占 OS 焦点，导致 autofill popup 被关闭。
+
+**关闭扩展：** 打开 Edge → `edge://extensions` → 逐一关闭所有扩展。
+
+**禁用 Microsoft Shopping（内置功能，无法通过扩展页关闭）(可以不做)：** 以管理员身份运行：
+
+```powershell
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v EdgeShoppingAssistantEnabled /t REG_DWORD /d 0 /f
+```
+
+重启 Edge 生效。
+
 ---
 
 **前提**：激活 venv，启动 LiteLLM proxy（`http://localhost:5000`）
@@ -233,4 +247,4 @@ EDGE_STABLE_USER_DATA_DIR = 'C:\\tmp2'  # 无历史指纹的干净目录
 
 ---
 
-**维护日期**：2026-03-27
+**维护日期**：2026-04-03

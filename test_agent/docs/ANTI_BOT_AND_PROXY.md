@@ -31,31 +31,110 @@ window.chrome: undefined     // headless 无 chrome 对象
 
 ---
 
-## 方案一：免费代理池（开发测试用）
+## 代理认证弹框问题（已解决）
+
+### 问题描述
+
+启用需要用户名/密码的 HTTP 代理（如 Webshare direct 模式）时，Edge 会弹出系统级认证对话框：
+
+```
+Sign in to access this site
+The proxy http://198.23.239.134:6540 requires a username and password.
+```
+
+### 根本原因
+
+**Chromium 源码层面的限制**（`devtools_url_loader_interceptor.cc:2177`）：
+
+```cpp
+if (!stages_.Has(InterceptionStage::kRequest) || !interceptor_ ||
+    !interceptor_->handle_auth_) {
+  std::move(callback).Run(true, std::nullopt);  // 直接弹框
+  return;
+}
+```
+
+CDP `Fetch.authRequired` 只在请求被匹配到 URL pattern 时才触发。  
+但 Edge 启动时恢复上次 session 的请求，走的是原始 `URLLoaderFactory`，不经过 `DevToolsURLLoaderFactoryProxy`，因此根本没有 `InterceptionJob`，完全绕过 CDP。
+
+更深层原因：`kill_edge_processes()` 强杀 Edge 进程，Edge 将其记录为 `exit_type: Crashed`，下次启动强制恢复 session，在 CDP attach 之前就发出代理认证请求。
+
+### 解决方案：`ProxyAuthWatcher`
+
+位于 `test_agent/scripts/proxy_manager.py`。
+
+**原理**：RAII 上下文管理器，启动一个后台 UIA 线程，持续监视"Sign in to access this site"对话框。一旦出现，自动填写用户名密码并点击 Sign in。
+
+```python
+from test_agent.scripts.proxy_manager import ProxyAuthWatcher
+
+with ProxyAuthWatcher(username='opxpuitp', password='eod3m6wco1ma'):
+    await browser_session.start()
+    # ... run tests
+# 退出 with 块时自动停止 UIA 线程
+```
+
+`test_runner.py` 中已集成，启用 `--use-proxy` 时自动生效。
+
+---
+
+## 方案一：Webshare 商业代理（当前主力）
 
 ### 快速启用
 
 ```bash
-# 自动抓取 30 个免费代理并轮换使用
-python test_agent/test_runner.py --use-proxy-pool
-
-# 自定义代理数量
-python test_agent/test_runner.py --use-proxy-pool --max-proxies 50
-
-# 快速验证（少量代理，启动快）
-python test_agent/test_runner.py --use-proxy-pool --max-proxies 5
+python test_agent/test_runner.py --use-proxy
 ```
 
 ### 工作原理
 
 ```
-启动时自动抓取代理
+启动时从 Webshare API 拉取 US 代理列表
+    ↓
+初始化 ProxyPool（round-robin 轮换）
+    ↓
+每个 test case 获取一个代理
+    ↓
+BrowserProfile(proxy=ProxySettings(...))
+    ↓
+ProxyAuthWatcher 自动处理认证弹框
+    ↓
+记录成功/失败，更新代理统计
+```
+
+### 配置（`test_agent/scripts/proxy_manager.py`）
+
+```python
+WEBSHARE_API_KEY = 'itrqt4v8grbbk0zpa9xaxl9ncnd5wo20ch0yceqm'
+WEBSHARE_PROXY_USERNAME = 'opxpuitp'
+WEBSHARE_PROXY_PASSWORD = 'eod3m6wco1ma'
+```
+
+---
+
+## 方案二：免费代理池（fallback / 开发测试用）
+
+当 Webshare 不可用时自动 fallback。也可单独使用（不推荐生产）。
+
+### 快速启用
+
+```bash
+# --use-proxy 会先尝试 Webshare，失败则自动 fallback 到免费池
+python test_agent/test_runner.py --use-proxy
+```
+
+### 工作原理
+
+```
+Webshare 初始化失败
+    ↓
+自动抓取免费代理
     ├─→ free-proxy-list.net (HTML 表格)
     └─→ proxyscrape.com (API)
     ↓
 去重（500+ → 300+）
     ↓
-并发验证（20 个/批，测试 https://httpbin.org/ip）
+并发验证（20 个/批，测试 https://www.nike.com）
     ↓
 保留可用代理（30 个）
     ↓
@@ -77,35 +156,31 @@ Test 5 → P1 → 成功 ✅  (P3 被跳过)
 # 屏蔽条件：fail_count >= 2 且 success_rate < 30%
 ```
 
-### 代理池管理
-
-```bash
-# 独立抓取并保存到文件
-python -m test_agent.llm.free_proxy_pool --scrape --count 30 --save proxies.txt
-
-# 使用已保存的代理文件
-# proxies.txt 格式：
-# 103.152.112.162:80
-# http://username:password@proxy.example.com:8080
-```
+### 在代码中集成
 
 ```python
-from test_agent.config import config
+from test_agent.scripts.proxy_manager import init_proxy, get_proxy, mark_proxy_result
+from test_agent.scripts.proxy_manager import WEBSHARE_API_KEY, WEBSHARE_PROXY_USERNAME, WEBSHARE_PROXY_PASSWORD
 
-# 从文件加载
-config.proxy_pool = ProxyPool.from_file('proxies.txt')
-config.use_proxy = True
-```
+async def main():
+    # 初始化代理池（Webshare 优先，free pool fallback）
+    await init_proxy(
+        webshare_api_key=WEBSHARE_API_KEY,
+        webshare_username=WEBSHARE_PROXY_USERNAME,
+        webshare_password=WEBSHARE_PROXY_PASSWORD,
+    )
 
-### 监控代理池状态
+    # 获取代理
+    proxy_settings = await get_proxy()
+    if proxy_settings:
+        browser_config['proxy'] = proxy_settings
 
-```python
-stats = config.proxy_pool.get_stats()
-print(f"Available: {stats['available']}/{stats['total']}")
-print(f"Blocked: {stats['blocked']}")
-print(f"Avg Success Rate: {stats['avg_success_rate']:.1%}")
-
-# 可用率 < 30% 时需要重新抓取
+    # 创建 BrowserSession
+    with ProxyAuthWatcher(proxy_settings.username, proxy_settings.password):
+        browser_session = BrowserSession(browser_profile=BrowserProfile(**browser_config))
+        await browser_session.start()
+        # ... run tests
+        await mark_proxy_result(success=True)
 ```
 
 ### 免费代理的局限性
@@ -117,82 +192,24 @@ print(f"Avg Success Rate: {stats['avg_success_rate']:.1%}")
 | 启动时间 | 30-60 秒 |
 | 稳定性 | 差，随时失效 |
 
-**适用**：开发测试、临时验证
+**适用**：开发测试、临时验证  
 **不适用**：生产环境、大规模爬取
-
-### 在代码中集成
-
-```python
-import asyncio
-from browser_use import Agent, BrowserProfile
-from test_agent.llm.llm_config import get_claude_sonnet
-from test_agent.config import config
-
-async def main():
-    # 初始化代理池
-    await config.init_proxy_pool(max_proxies=30)
-
-    # 获取代理并创建 BrowserProfile
-    browser_config = config.get_browser_profile_config()
-    proxy_settings = await config.get_proxy_for_browser()
-    if proxy_settings:
-        browser_config['proxy'] = proxy_settings  # ProxySettings 对象，非 dict
-
-    browser = BrowserProfile(**browser_config)
-    agent = Agent(
-        task="Visit nike.com and add shoes to cart",
-        llm=get_claude_sonnet(),
-        browser_profile=browser,
-    )
-
-    history = await agent.run()
-    await config.mark_proxy_result(success=history.is_successful())
-
-asyncio.run(main())
-```
-
-> **注意**：`get_proxy_for_browser()` 返回 `ProxySettings` 对象而非 `dict`。
-> `BrowserProfile` 的 `proxy` 字段类型是 `ProxySettings | None`，传入 `dict` 时因 `extra='ignore'` 会被静默丢弃，代理不生效。
-
-### 常见问题
-
-**Q：抓取很慢？**
-减少 `--max-proxies` 数量，或提前抓取保存到文件。
-
-**Q：所有代理都被屏蔽了？**
-ProxyPool 会自动重置成功率最高的 1/3 代理。如果仍不够：
-```bash
-python test_agent/test_runner.py --use-proxy-pool --max-proxies 100
-```
-
-**Q：代理池会自动重试吗？**
-不会，需要在业务逻辑中自行重试：
-```python
-for i in range(3):
-    proxy = await config.get_proxy_for_browser()
-    try:
-        # 运行测试...
-        await config.mark_proxy_result(success=True)
-        break
-    except Exception:
-        await config.mark_proxy_result(success=False)
-```
 
 ---
 
-## 方案二：商业住宅代理（生产环境推荐）
+## 方案三：其他商业住宅代理
 
 | 服务商 | 类型 | 月费 | IP 池大小 | 推荐度 |
 |--------|------|------|---------|--------|
+| Webshare | 住宅/数据中心 | $20+ | 3000 万+ | ⭐⭐⭐⭐⭐（当前使用） |
 | Bright Data | 住宅 | $500+ | 7200 万+ | ⭐⭐⭐⭐⭐ |
 | Smartproxy | 住宅 | $75+ | 4000 万+ | ⭐⭐⭐⭐⭐ |
 | Oxylabs | 住宅 | $300+ | 1 亿+ | ⭐⭐⭐⭐⭐ |
 | IPRoyal | 住宅 | $7/GB | 200 万+ | ⭐⭐⭐⭐ |
-| ScrapingBee | API | $49+ | — | ⭐⭐⭐⭐（最简单） |
 
 **对于 Nike 等 Akamai 保护的网站，必须使用住宅代理，数据中心 IP 会被立即封禁。**
 
-### Bright Data 配置
+### Bright Data 配置示例
 
 ```python
 from browser_use.browser.profile import ProxySettings
@@ -204,54 +221,17 @@ proxy = ProxySettings(
 )
 ```
 
-### Smartproxy 配置（Sticky Sessions）
-
-```python
-# 每个 session_id 对应一个固定 IP（持续 10 分钟）
-proxies = []
-for i in range(20):
-    proxies.append(ProxySettings(
-        server="http://gate.smartproxy.com:7000",
-        username=f"your_username-session-{i}-country-us",
-        password="your_password",
-    ))
-```
-
-### ScrapingBee（最省事，按请求计费）
-
-```python
-import requests
-
-response = requests.get('https://app.scrapingbee.com/api/v1/', params={
-    'api_key': 'YOUR_KEY',
-    'url': 'https://www.nike.com/...',
-    'render_js': True,
-    'premium_proxy': True,
-    'country_code': 'us',
-    'stealth_proxy': True,
-})
-```
-
-> ScrapingBee 返回 HTML，需要手动处理，不能直接与 browser-use 集成。
-
 ---
 
-## 方案三：反检测浏览器配置（配合代理使用）
+## 方案四：反检测浏览器配置（配合代理使用）
 
 ```python
-# test_agent/config.py
-browser_config = {
-    'executable_path': self.edge_path,
-    'user_data_dir': self.user_data_dir,
-    'args': [
-        '--disable-blink-features=AutomationControlled',
-        '--exclude-switches=enable-automation',
-        '--disable-infobars',
-        '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        '--window-size=1920,1080',
-    ],
-    'headless': False,  # Akamai 能检测 headless，永远不要用
-}
+# test_agent/config.py → get_browser_profile_config()
+'args': [
+    '--disable-blink-features=AutomationControlled',
+    '--exclude-switches=enable-automation',
+    '--disable-infobars',
+]
 ```
 
 ### 注入反检测脚本（高级）
@@ -260,13 +240,6 @@ browser_config = {
 // 在页面加载前注入，隐藏自动化特征
 Object.defineProperty(navigator, 'webdriver', { get: () => false });
 window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
-Object.defineProperty(navigator, 'plugins', {
-    get: () => [{ name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", length: 1 }],
-});
-```
-
-```python
-await page.addInitScript(bypass_script)
 ```
 
 ---
@@ -277,19 +250,15 @@ await page.addInitScript(bypass_script)
 |------|------|------|--------|---------|
 | 免费代理池 | 免费 | ⭐⭐ 20-30% | ⭐ 差 | 开发测试 |
 | 反检测配置 | 免费 | ⭐⭐⭐ 50-60% | ⭐⭐⭐ | 简单网站 |
-| 商业住宅代理 | $75-500+/月 | ⭐⭐⭐⭐⭐ 95%+ | ⭐⭐⭐⭐⭐ | 生产环境 |
-| 代理 + 反检测 | $75-500+/月 | ⭐⭐⭐⭐⭐ 99%+ | ⭐⭐⭐⭐⭐ | 严格网站 |
-| ScrapingBee API | $49+/月 | ⭐⭐⭐⭐ 90%+ | ⭐⭐⭐⭐ | 最简单集成 |
-
-**预算建议**：
-- 开发阶段：免费代理池 + 反检测配置
-- 生产环境：Smartproxy ($75/月) + 反检测配置
-- 不想折腾：ScrapingBee 免费试用起步
+| Webshare 商业代理 | $20+/月 | ⭐⭐⭐⭐ 90%+ | ⭐⭐⭐⭐ | 当前主力 |
+| 住宅代理 + 反检测 | $75-500+/月 | ⭐⭐⭐⭐⭐ 99%+ | ⭐⭐⭐⭐⭐ | 严格网站 |
 
 ---
 
-## 相关文档
+## 相关文件
 
+- `test_agent/scripts/proxy_manager.py` — 代理池 + ProxyAuthWatcher 实现
+- `test_agent/test_runner.py` — `--use-proxy` 入口
 - `CLAUDE_SETUP.md` — Claude 模型配置
-- `USER_DATA_DIR_SOLUTION.md` — Browser profile 污染问题（另一个反爬虫角度）
+- `USER_DATA_DIR_SOLUTION.md` — Browser profile 污染问题
 - `RDP_Session_Management.md` — RDP 环境下的特殊问题

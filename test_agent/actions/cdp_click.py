@@ -370,7 +370,7 @@ async def execute_cdp_click(
 		)
 
 
-from test_agent.scripts.postmsg_click import postmsg_lbuttondown as _postmsg_lbuttondown
+from test_agent.scripts.renderer_focus import postmsg_lbuttondown as _postmsg_lbuttondown
 
 
 async def execute_cdp_click_by_selector(
